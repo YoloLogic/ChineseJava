@@ -1,0 +1,19 @@
+# ChineseJava 诊断补缺表 —— 上游 zh_CN 缺的 15 条键（缺口口径：Σ 每项缺口）
+# 译文句式照上游既有模板（关键字名与方法名留英）；生成器把本表并入产物
+# 列：包	键	英文原文	中文译文	状态	理由
+jdk.compiler	compiler.err.non.abstract.value.class.cant.be.sealed.or.non.sealed	''sealed'' or ''non-sealed'' modifiers are only applicable to abstract value classes	''sealed'' 或 ''non-sealed'' 修饰符只适用于抽象值类	已译	对齐上游句式；关键字名/方法名留英
+jdk.compiler	compiler.err.strict.field.not.have.been.initialized.before.super	strict field {0} is not initialized before the supertype constructor has been called	在调用超类构造器之前，严格字段 {0} 尚未初始化	已译	对齐上游句式（实测模板）
+jdk.compiler	compiler.err.value.type.has.identity.super.type	The identity type {1} cannot be a supertype of the value type {0}	身份类型 {1} 不能作为值类型 {0} 的超类	已译	对齐上游句式；关键字名/方法名留英
+jdk.compiler	compiler.misc.feature.value.classes	value classes	值类	已译	对齐上游句式；关键字名/方法名留英
+jdk.compiler	compiler.misc.illegal.tvar.bound	illegal type variable bound: {0}	非法的类型变量限制范围: {0}	已译	对齐上游句式（实测模板）
+jdk.compiler	compiler.misc.missing.case	missing case:	缺少 case:	已译	对齐上游句式（实测模板）
+jdk.compiler	compiler.misc.missing.cases	missing cases:	缺少 case:	已译	对齐上游句式（实测模板）
+jdk.compiler	compiler.misc.type.req.identity	identity class	身份类	已译	对齐上游句式（实测模板）
+jdk.compiler	compiler.warn.ineffectual.serial.method.value.class	serialization-related method ''{0}'' is not effective in a value class	与序列化相关的方法 ''{0}'' 在值类中无效	已译	对齐上游句式；关键字名/方法名留英
+jdk.compiler	compiler.warn.serializable.value.class.without.write.replace.1	serializable value class does not declare, or inherits, a writeReplace method	可序列化的值类未声明或未继承 writeReplace 方法	已译	对齐上游句式；关键字名/方法名留英
+jdk.compiler	compiler.warn.serializable.value.class.without.write.replace.2	serializable class does not declare, or inherits, a writeReplace method	可序列化类未声明或未继承 writeReplace 方法	已译	对齐上游句式；关键字名/方法名留英
+jdk.compiler	compiler.warn.value.finalize	value classes should not have a finalizer method, as it is not invoked	值类不应有 finalize 方法，因为它不会被调用	已译	对齐上游句式；关键字名/方法名留英
+jdk.compiler	javac.opt.arg.preview-mode	true/false	true/false	已译	占位符（与其它 arg.* 一致，有意留英）
+jdk.compiler	javac.opt.preview-mode	Specify whether preview mode should be enabled	指定是否应启用预览功能	已译	对齐上游句式（实测模板）
+jdk.javadoc	doclet.theme.underline_links	Underline links in text	给文本中的链接加下划线	已译	照 standard_zh_CN 的句式
+jdk.compiler	compiler.err.chinesejava.keyword	''{0}'' is a ChineseJava keyword, and may not be used as an identifier	{0} 是 ChineseJava 关键字, 不能用作标识符（可改用对应的英文拼写, 或换个名字）	我方新增	中文硬关键字被当作标识符时的专属消息（照上游 assert/enum 的 as.identifier 范式）；英文侧必须有（CreateSymbols 从英文 bundle 生成 Errors 类）

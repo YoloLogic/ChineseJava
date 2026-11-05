@@ -1,0 +1,1429 @@
+diff --git a/make/autoconf/toolchain.m4 b/make/autoconf/toolchain.m4
+index ea560c611..4caf36b6f 100644
+--- a/make/autoconf/toolchain.m4
++++ b/make/autoconf/toolchain.m4
+@@ -342,8 +342,17 @@ AC_DEFUN([TOOLCHAIN_EXTRACT_COMPILER_VERSION],
+     fi
+     # Collapse compiler output into a single line
+     COMPILER_VERSION_STRING=`$ECHO $COMPILER_VERSION_OUTPUT`
++    # ChineseJava 本地补丁（上游本地化 bug 绕过）：原实现依赖英文单词 "ersion"，
++    # 中文横幅「用于 x64 的 Microsoft (R) C/C++ 优化编译器 19.44.35228 版」里没有这个词，
++    # 于是整行被当作版本号，进而误报「编译器比 19.28 老」。改为先取行内第一个点分版本号；
++    # 取不到时再退回原逻辑（英文行为因此完全不变）。
++    # 注意：m4 用 @<:@ / @:>@ 表示方括号，此处不可写字面方括号。
+     COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
+-        $SED -e 's/^.*ersion.\(@<:@1-9@:>@@<:@0-9.@:>@*\) .*$/\1/'`
++        $GREP -o -E '@<:@1-9@:>@@<:@0-9@:>@*\.@<:@0-9@:>@@<:@0-9.@:>@*' | $HEAD -n 1`
++    if test "x$COMPILER_VERSION_NUMBER" = x; then
++      COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
++          $SED -e 's/^.*ersion.\(@<:@1-9@:>@@<:@0-9.@:>@*\) .*$/\1/'`
++    fi
+   elif test  "x$TOOLCHAIN_TYPE" = xgcc; then
+     # gcc --version output typically looks like
+     #     gcc (Ubuntu/Linaro 4.8.1-10ubuntu9) 4.8.1
+@@ -919,7 +928,14 @@ AC_DEFUN_ONCE([TOOLCHAIN_MISC_CHECKS],
+   if test  "x$TOOLCHAIN_TYPE" = xmicrosoft; then
+     # On Windows, double-check that we got the right compiler.
+     CC_VERSION_OUTPUT=`$CC 2>&1 1>/dev/null | $HEAD -n 1 | $TR -d '\r'`
+-    COMPILER_CPU_TEST=`$ECHO $CC_VERSION_OUTPUT | $SED -n "s/^.* \(.*\)$/\1/p"`
++    # ChineseJava 本地补丁（上游本地化 bug 绕过）：原实现「取最后一个空格分隔的词」，
++    # 英文横幅「… Version 19.44.35228 for x64」得到 x64，但中文横幅
++    # 「用于 x64 的 … 编译器 19.44.35228 版」得到的是「版」。改为直接找已知 CPU 标识；
++    # 找不到再退回原逻辑（英文行为因此完全不变）。
++    COMPILER_CPU_TEST=`$ECHO $CC_VERSION_OUTPUT | $GREP -o -e x64 -e x86 -e ARM64 | $HEAD -n 1`
++    if test "x$COMPILER_CPU_TEST" = x; then
++      COMPILER_CPU_TEST=`$ECHO $CC_VERSION_OUTPUT | $SED -n "s/^.* \(.*\)$/\1/p"`
++    fi
+     if test "x$OPENJDK_TARGET_CPU" = "xx86"; then
+       if test "x$COMPILER_CPU_TEST" != "x80x86" -a "x$COMPILER_CPU_TEST" != "xx86"; then
+         AC_MSG_ERROR([Target CPU mismatch. We are building for $OPENJDK_TARGET_CPU but CL is for "$COMPILER_CPU_TEST"; expected "80x86" or "x86".])
+diff --git a/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/JavacParser.java b/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/JavacParser.java
+index 2d17523ed..74facda4e 100644
+--- a/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/JavacParser.java
++++ b/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/JavacParser.java
+@@ -763,11 +763,22 @@ protected Name ident(boolean allowClass, boolean asVariable) {
+             nextToken();
+             return name;
+         } else if (token.kind == ASSERT) {
+-            log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.AssertAsIdentifier);
++            // ChineseJava：中文拼写（断言）走我方提示，英文拼写照旧走上游的 AssertAsIdentifier（铁律①）
++            String zhAssert = zhSpelling(token);
++            if (zhAssert != null) {
++                log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.ChinesejavaKeyword(zhAssert));
++            } else {
++                log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.AssertAsIdentifier);
++            }
+             nextToken();
+             return names.error;
+         } else if (token.kind == ENUM) {
+-            log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.EnumAsIdentifier);
++            String zhEnum = zhSpelling(token);
++            if (zhEnum != null) {
++                log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.ChinesejavaKeyword(zhEnum));
++            } else {
++                log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.EnumAsIdentifier);
++            }
+             nextToken();
+             return names.error;
+         } else if (token.kind == THIS) {
+@@ -776,7 +787,12 @@ protected Name ident(boolean allowClass, boolean asVariable) {
+                 nextToken();
+                 return name;
+             } else {
+-                log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.ThisAsIdentifier);
++                String zhThis = zhSpelling(token);
++                if (zhThis != null) {
++                    log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.ChinesejavaKeyword(zhThis));
++                } else {
++                    log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.ThisAsIdentifier);
++                }
+                 nextToken();
+                 return names.error;
+             }
+@@ -799,6 +815,15 @@ protected Name ident(boolean allowClass, boolean asVariable) {
+             nextToken();
+             return name;
+         } else {
++            // ChineseJava：中文**硬**关键字被当作标识符用 —— 照上游 assert/enum 的既有做法给专属消息
++            // （compiler.err.assert.as.identifier / enum.as.identifier 就是这个套路）。
++            // 只对中文拼写生效：纯英文源码走下面原分支，错误消息与条数一字不变（铁律①）。
++            String zhKeyword = zhSpelling(token);
++            if (zhKeyword != null) {
++                log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.ChinesejavaKeyword(zhKeyword));
++                nextToken();
++                return names.error;
++            }
+             accept(IDENTIFIER);
+             if (allowClass && token.kind == CLASS) {
+                 nextToken();
+@@ -808,6 +833,39 @@ protected Name ident(boolean allowClass, boolean asVariable) {
+         }
+     }
+ 
++    /**
++     * ChineseJava：取当前 token 的中文关键字拼写（不是中文关键字则返回 null）。
++     *
++     * NAMED 类 token（布尔/整数/真值/空值…）直接 token.name()；
++     * 结构性关键字（类型/如果/返回…）上游的 TokenKind 是 Tag.DEFAULT，**token 不保留拼写**，
++     * 只能按位置回读源码。回读结果要再过 ZhKeywords.hardKeyword（表内 2–6 汉字的拼写）这一关，
++     * 所以即便文件里有 unicode 转义（反斜杠 u 形式）导致位置偏移，也只会"少给一次提示"，不会给错提示。
++     * 注意：标点类 token 的 name() 会抛 UnsupportedOperationException，因此必须先判 Tag.NAMED
++     *（实测踩过：少了这个判断连普通英文源码都会把 javac 打崩）。
++     */
++    private String zhSpelling(Token token) {
++        if (token == null || token.kind == null) {
++            return null;
++        }
++        if (token.kind.tag == Token.Tag.NAMED) {
++            return ZhKeywords.hardKeyword(token.name().toString());
++        }
++        try {
++            var sourceFile = log.currentSourceFile();
++            if (sourceFile == null) {
++                return null;
++            }
++            CharSequence content = sourceFile.getCharContent(false);
++            if (content == null || token.pos < 0 || token.endPos > content.length()
++                    || token.endPos <= token.pos) {
++                return null;
++            }
++            return ZhKeywords.hardKeyword(content.subSequence(token.pos, token.endPos).toString());
++        } catch (Exception ex) {
++            return null;
++        }
++    }
++
+     /**
+      * Qualident = Ident { DOT [Annotations] Ident }
+      */
+@@ -991,7 +1049,7 @@ public JCPattern parsePattern(int pos, JCModifiers mods, JCExpression parsedType
+         }
+         else {
+             if (parsedType == null) {
+-                boolean var = token.kind == IDENTIFIER && token.name() == names.var;
++                boolean var = token.kind == IDENTIFIER && isSoft(token.name(), names.var);
+                 e = unannotatedType(allowVar, TYPE | NOLAMBDA);
+                 if (var) {
+                     e = replaceTypeWithVar(e);
+@@ -1095,7 +1153,7 @@ public JCExpression unannotatedType(boolean allowVar, int newmode) {
+         JCExpression result = term(newmode);
+         Name restrictedTypeName = restrictedTypeName(result, !allowVar);
+ 
+-        if (restrictedTypeName != null && (!allowVar || restrictedTypeName != names.var)) {
++        if (restrictedTypeName != null && (!allowVar || !isSoft(restrictedTypeName, names.var))) {
+             syntaxError(result.pos, Errors.RestrictedTypeNotAllowedHere(restrictedTypeName));
+         }
+ 
+@@ -2348,7 +2406,7 @@ JCExpression arguments(List<JCExpression> typeArgs, JCExpression t) {
+     }
+ 
+     boolean isInvalidUnqualifiedMethodIdentifier(int pos, Name name) {
+-        if (name == names.yield) {
++        if (isSoft(name, names.yield)) {
+             if (allowYieldStatement) {
+                 return true;
+             } else {
+@@ -2949,7 +3007,7 @@ List<JCStatement> blockStatement() {
+             dc = token.docComment();
+             return List.of(classOrRecordOrInterfaceOrEnumDeclaration(modifiersOpt(), dc));
+         case IDENTIFIER:
+-            if (token.name() == names.yield && allowYieldStatement) {
++            if (isSoft(token.name(), names.yield) && allowYieldStatement) {
+                 Token next = S.token(1);
+                 boolean isYieldStatement;
+                 switch (next.kind) {
+@@ -3003,10 +3061,13 @@ List<JCStatement> blockStatement() {
+                 //else intentional fall-through
+             } else {
+                 if (isNonSealedClassStart(true)) {
++                    boolean zhNonSealedForm = zhNonSealed != null && token.name() == zhNonSealed;
+                     log.error(token.pos, Errors.SealedOrNonSealedLocalClassesNotAllowed);
+                     nextToken();
+-                    nextToken();
+-                    nextToken();
++                    if (!zhNonSealedForm) {
++                        nextToken();
++                        nextToken();
++                    }
+                     return List.of(classOrRecordOrInterfaceOrEnumDeclaration(modifiersOpt(), token.docComment()));
+                 } else if (isSealedClassStart(true)) {
+                     checkSourceLevel(Feature.SEALED_CLASSES);
+@@ -3399,7 +3460,7 @@ private JCCaseLabel parseCaseLabel(boolean allowDefault) {
+     private JCExpression parseGuard(JCCaseLabel label) {
+         JCExpression guard = null;
+ 
+-        if (token.kind == IDENTIFIER && token.name() == names.when) {
++        if (token.kind == IDENTIFIER && isSoft(token.name(), names.when)) {
+             int pos = token.pos;
+ 
+             nextToken();
+@@ -3490,7 +3551,7 @@ else if (peekToken(lookahead, LBRACKET) ||
+                     if (parenDepth == 0 &&
+                         typeDepth == 0 &&
+                         peekToken(lookahead, TokenKind.IDENTIFIER) &&
+-                        S.token(lookahead + 1).name() == names.when) {
++                        isSoft(S.token(lookahead + 1).name(), names.when)) {
+                         return PatternResult.PATTERN;
+                     }
+                     break;
+@@ -3625,8 +3686,12 @@ protected JCModifiers modifiersOpt(JCModifiers partial) {
+             case IDENTIFIER  : {
+                 if (isNonSealedClassStart(false)) {
+                     flag = Flags.NON_SEALED;
+-                    nextToken();
+-                    nextToken();
++                    if (zhNonSealed != null && token.name() == zhNonSealed) {
++                        // ChineseJava：中文「非密封」是一个 token，交给循环末尾的 nextToken()
++                    } else {
++                        nextToken();
++                        nextToken();
++                    }
+                     break;
+                 }
+                 if (isSealedClassStart(false)) {
+@@ -3846,7 +3911,7 @@ JCVariableDecl variableDeclaratorRest(int pos, JCModifiers mods, JCExpression ty
+         if (elemType.hasTag(IDENT)) {
+             Name typeName = ((JCIdent) elemType).name;
+             if (restrictedTypeNameStartingAtSource(typeName, pos, !compound && localDecl) != null) {
+-                if (typeName != names.var) {
++                if (!isSoft(typeName, names.var)) {
+                     reportSyntaxError(elemType.pos, Errors.RestrictedTypeNotAllowedHere(typeName));
+                 } else if (type.hasTag(TYPEARRAY) && !compound) {
+                     //error - 'var' and arrays
+@@ -3885,42 +3950,42 @@ Name restrictedTypeName(JCExpression e, boolean shouldWarn) {
+     }
+ 
+     Source restrictedTypeNameStartingAtSource(Name name, int pos, boolean shouldWarn) {
+-        if (name == names.var) {
++        if (isSoft(name, names.var)) {
+             if (Feature.LOCAL_VARIABLE_TYPE_INFERENCE.allowedInSource(source)) {
+                 return Source.JDK10;
+             } else if (shouldWarn) {
+                 log.warning(DiagnosticFlag.SYNTAX, pos, Warnings.RestrictedTypeNotAllowed(name, Source.JDK10));
+             }
+         }
+-        if (name == names.yield) {
++        if (isSoft(name, names.yield)) {
+             if (allowYieldStatement) {
+                 return Source.JDK14;
+             } else if (shouldWarn) {
+                 log.warning(DiagnosticFlag.SYNTAX, pos, Warnings.RestrictedTypeNotAllowed(name, Source.JDK14));
+             }
+         }
+-        if (name == names.record) {
++        if (isSoft(name, names.record)) {
+             if (allowRecords) {
+                 return Source.JDK14;
+             } else if (shouldWarn) {
+                 log.warning(DiagnosticFlag.SYNTAX, pos, Warnings.RestrictedTypeNotAllowedPreview(name, Source.JDK14));
+             }
+         }
+-        if (name == names.value) {
++        if (isSoft(name, names.value)) {
+             if (allowValueClasses) {
+                 return Source.DEFAULT;
+             } else if (shouldWarn) {
+                 log.warning(pos, Warnings.RestrictedTypeNotAllowedPreview(name, Source.DEFAULT));
+             }
+         }
+-        if (name == names.sealed) {
++        if (isSoft(name, names.sealed)) {
+             if (allowSealedTypes) {
+                 return Source.JDK15;
+             } else if (shouldWarn) {
+                 log.warning(DiagnosticFlag.SYNTAX, pos, Warnings.RestrictedTypeNotAllowedPreview(name, Source.JDK15));
+             }
+         }
+-        if (name == names.permits) {
++        if (isSoft(name, names.permits)) {
+             if (allowSealedTypes) {
+                 return Source.JDK15;
+             } else if (shouldWarn) {
+@@ -4115,11 +4180,11 @@ public JCTree.JCCompilationUnit parseCompilationUnit() {
+                             log.warning(DiagnosticFlag.SYNTAX, semiList.first().pos, Warnings.ExtraneousSemicolon);
+                     }
+                     ModuleKind kind = ModuleKind.STRONG;
+-                    if (token.name() == names.open) {
++                    if (isSoft(token.name(), names.open)) {
+                         kind = ModuleKind.OPEN;
+                         nextToken();
+                     }
+-                    if (token.kind == IDENTIFIER && token.name() == names.module) {
++                    if (token.kind == IDENTIFIER && isSoft(token.name(), names.module)) {
+                         if (mods != null) {
+                             checkNoMods(mods.flags & ~Flags.DEPRECATED);
+                         }
+@@ -4245,7 +4310,7 @@ List<JCDirective> moduleDirectiveList() {
+         ListBuffer<JCDirective> defs = new ListBuffer<>();
+         while (token.kind == IDENTIFIER) {
+             int pos = token.pos;
+-            if (token.name() == names.requires) {
++            if (isSoft(token.name(), names.requires)) {
+                 nextToken();
+                 boolean isTransitive = false;
+                 boolean isStaticPhase = false;
+@@ -4253,7 +4318,7 @@ List<JCDirective> moduleDirectiveList() {
+                 while (true) {
+                     switch (token.kind) {
+                         case IDENTIFIER:
+-                            if (token.name() == names.transitive) {
++                            if (isSoft(token.name(), names.transitive)) {
+                                 Token t1 = S.token(1);
+                                 if (t1.kind == SEMI || t1.kind == DOT) {
+                                     break loop;
+@@ -4280,12 +4345,12 @@ List<JCDirective> moduleDirectiveList() {
+                 JCExpression moduleName = qualident(false);
+                 accept(SEMI);
+                 defs.append(toP(F.at(pos).Requires(isTransitive, isStaticPhase, moduleName)));
+-            } else if (token.name() == names.exports || token.name() == names.opens) {
+-                boolean exports = token.name() == names.exports;
++            } else if (isSoft(token.name(), names.exports) || isSoft(token.name(), names.opens)) {
++                boolean exports = isSoft(token.name(), names.exports);
+                 nextToken();
+                 JCExpression pkgName = qualident(false);
+                 List<JCExpression> moduleNames = null;
+-                if (token.kind == IDENTIFIER && token.name() == names.to) {
++                if (token.kind == IDENTIFIER && isSoft(token.name(), names.to)) {
+                     nextToken();
+                     moduleNames = qualidentList(false);
+                 }
+@@ -4297,11 +4362,11 @@ List<JCDirective> moduleDirectiveList() {
+                     d = F.at(pos).Opens(pkgName, moduleNames);
+                 }
+                 defs.append(toP(d));
+-            } else if (token.name() == names.provides) {
++            } else if (isSoft(token.name(), names.provides)) {
+                 nextToken();
+                 JCExpression serviceName = qualident(false);
+                 List<JCExpression> implNames;
+-                if (token.kind == IDENTIFIER && token.name() == names.with) {
++                if (token.kind == IDENTIFIER && isSoft(token.name(), names.with)) {
+                     nextToken();
+                     implNames = qualidentList(false);
+                 } else {
+@@ -4310,7 +4375,7 @@ List<JCDirective> moduleDirectiveList() {
+                 }
+                 accept(SEMI);
+                 defs.append(toP(F.at(pos).Provides(serviceName, implNames)));
+-            } else if (token.name() == names.uses) {
++            } else if (isSoft(token.name(), names.uses)) {
+                 nextToken();
+                 JCExpression service = qualident(false);
+                 accept(SEMI);
+@@ -4333,7 +4398,7 @@ protected JCTree importDeclaration() {
+         if (token.kind == STATIC) {
+             importStatic = true;
+             nextToken();
+-        } else if (token.kind == IDENTIFIER && token.name() == names.module &&
++        } else if (token.kind == IDENTIFIER && isSoft(token.name(), names.module) &&
+                    peekToken(TokenKind.IDENTIFIER)) {
+             checkSourceLevel(Feature.MODULE_IMPORTS);
+             nextToken();
+@@ -4519,7 +4584,7 @@ protected JCClassDecl interfaceDeclaration(JCModifiers mods, Comment dc) {
+     }
+ 
+     List<JCExpression> permitsClause(JCModifiers mods, String classOrInterface) {
+-        if (allowSealedTypes && token.kind == IDENTIFIER && token.name() == names.permits) {
++        if (allowSealedTypes && token.kind == IDENTIFIER && isSoft(token.name(), names.permits)) {
+             checkSourceLevel(Feature.SEALED_CLASSES);
+             if ((mods.flags & Flags.SEALED) == 0) {
+                 log.error(token.pos, Errors.InvalidPermitsClause(Fragments.ClassIsNotSealed(classOrInterface)));
+@@ -5002,8 +5067,47 @@ private boolean isDefiniteStatementStartToken() {
+         };
+     }
+ 
++    // ===================== ChineseJava：软关键字（位置敏感） =====================
++    // 中文拼写只在解析层被识别：命中时等价于英文软关键字，其它位置仍是普通标识符，
++    // 因此「整数 记录 = 1;」照旧合法，且 AST/字节码里保留中文原名。
++    // 表来源：tools\关键字表.tsv → 生成物 ZhKeywords.SOFT（生成物禁止手改）。
++
++    private Map<Name, Name> zhSoftNames;
++    private Name zhNonSealed;
++
++    private void initZhSoftNames() {
++        Map<Name, Name> m = new HashMap<>();
++        Name nonSealed = null;
++        for (int i = 0; i < ZhKeywords.SOFT.length; i += 2) {
++            String zh = ZhKeywords.SOFT[i];
++            String en = ZhKeywords.SOFT[i + 1];
++            if (zh == null || zh.isEmpty()) {
++                continue;
++            }
++            if ("non-sealed".equals(en)) {
++                nonSealed = names.fromString(zh);   // 英文是两个 token、中文是一个，单独处理
++            } else {
++                m.put(names.fromString(en), names.fromString(zh));
++            }
++        }
++        zhNonSealed = nonSealed;
++        zhSoftNames = m;
++    }
++
++    /** ChineseJava：tokenName 是否就是软关键字 english（接受英文原拼写与中文拼写）。 */
++    private boolean isSoft(Name tokenName, Name english) {
++        if (tokenName == english) {
++            return true;
++        }
++        if (zhSoftNames == null) {
++            initZhSoftNames();
++        }
++        Name zh = zhSoftNames.get(english);
++        return zh != null && tokenName == zh;
++    }
++
+     protected boolean isRecordStart() {
+-        if (token.kind == IDENTIFIER && token.name() == names.record && peekToken(TokenKind.IDENTIFIER)) {
++        if (token.kind == IDENTIFIER && isSoft(token.name(), names.record) && peekToken(TokenKind.IDENTIFIER)) {
+             checkSourceLevel(Feature.RECORDS);
+             return true;
+         } else {
+@@ -5013,7 +5117,7 @@ protected boolean isRecordStart() {
+ 
+     protected boolean isNonSealedClassStart(boolean local) {
+         if (isNonSealedIdentifier(token, 0)) {
+-            Token next = S.token(3);
++            Token next = (zhNonSealed != null && token.name() == zhNonSealed) ? S.token(1) : S.token(3);
+             return allowedAfterSealedOrNonSealed(next, local, true);
+         }
+         return false;
+@@ -5025,16 +5129,21 @@ protected boolean isNonSealedIdentifier(Token someToken, int lookAheadOffset) {
+             Token tokenSealed = S.token(lookAheadOffset + 2);
+             if (someToken.endPos == tokenSub.pos &&
+                     tokenSub.endPos == tokenSealed.pos &&
+-                    tokenSealed.name() == names.sealed) {
++                    isSoft(tokenSealed.name(), names.sealed)) {
+                 checkSourceLevel(Feature.SEALED_CLASSES);
+                 return true;
+             }
+         }
++        // ChineseJava：中文「非密封」是一个 token，等价于英文 non-sealed 三 token 序列
++        if (zhNonSealed != null && someToken.name() == zhNonSealed) {
++            checkSourceLevel(Feature.SEALED_CLASSES);
++            return true;
++        }
+         return false;
+     }
+ 
+     protected boolean isValueModifier() {
+-        if (token.kind == IDENTIFIER && token.name() == names.value) {
++        if (token.kind == IDENTIFIER && isSoft(token.name(), names.value)) {
+             boolean isValueModifier = false;
+             Token next = S.token(1);
+             switch (next.kind) {
+@@ -5046,7 +5155,7 @@ protected boolean isValueModifier() {
+                     isValueModifier = true;
+                     break;
+                 case IDENTIFIER: // value record R || value value
+-                    if (next.name() == names.record || next.name() == names.value
++                    if (isSoft(next.name(), names.record) || isSoft(next.name(), names.value)
+                             || (mode & EXPR) != 0)
+                         isValueModifier = true;
+                     break;
+@@ -5059,7 +5168,7 @@ protected boolean isValueModifier() {
+     }
+ 
+     protected boolean isSealedClassStart(boolean local) {
+-        if (token.name() == names.sealed) {
++        if (isSoft(token.name(), names.sealed)) {
+             Token next = S.token(1);
+             if (allowedAfterSealedOrNonSealed(next, local, false)) {
+                 checkSourceLevel(Feature.SEALED_CLASSES);
+@@ -5086,8 +5195,8 @@ private boolean allowedAfterSealedOrNonSealed(Token next, boolean local, boolean
+                 }
+                 case PUBLIC, PROTECTED, PRIVATE, ABSTRACT, STATIC, FINAL, STRICTFP, CLASS, INTERFACE, ENUM -> true;
+                 case IDENTIFIER -> isNonSealedIdentifier(next, currentIsNonSealed ? 3 : 1) ||
+-                        next.name() == names.sealed ||
+-                        allowValueClasses && next.name() == names.value;
++                        isSoft(next.name(), names.sealed) ||
++                        allowValueClasses && isSoft(next.name(), names.value);
+                 default -> false;
+             };
+     }
+@@ -5520,6 +5629,15 @@ protected JCVariableDecl implicitParameter() {
+      */
+     protected JCExpression checkExprStat(JCExpression t) {
+         if (!TreeInfo.isExpressionStatement(t)) {
++            // ChineseJava：解析在这个 token 上停下来时，若它是中文**硬**关键字（典型：
++            // `int 抽象 = 1;` —— 局部变量声明位置），给可行动提示。
++            // 纯英文源码 zhSpelling 返回 null ⇒ 走下面原分支，消息与条数一字不变（铁律①）；
++            // 上游英文在同样位置也是 NotStmt（实测 `int abstract = 1;` ⇒ 不是语句）。
++            String zhKeyword = zhSpelling(token);
++            if (zhKeyword != null) {
++                log.error(DiagnosticFlag.SYNTAX, token.pos, Errors.ChinesejavaKeyword(zhKeyword));
++                return F.at(t.pos).Erroneous(List.<JCTree>of(t));
++            }
+             JCExpression ret = F.at(t.pos).Erroneous(List.<JCTree>of(t));
+             log.error(DiagnosticFlag.SYNTAX, ret, Errors.NotStmt);
+             return ret;
+@@ -5698,3 +5816,4 @@ private void updateUnexpectedTopLevelDefinitionStartError(boolean hasPackageDecl
+         }
+     }
+ }
++
+diff --git a/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/Tokens.java b/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/Tokens.java
+index 4abd9378c..b99f7af36 100644
+--- a/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/Tokens.java
++++ b/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/Tokens.java
+@@ -71,6 +71,18 @@ protected Tokens(Context context) {
+                 keywords.put(t.name, t);
+             }
+         }
++
++        // ChineseJava：中文并行拼写（唯一真相 tools\关键字表.tsv，本块由生成器生成，禁止手改）
++        for (int i = 0; i < ZhKeywords.HARD.length; i += 2) {
++            String zh = ZhKeywords.HARD[i];
++            String en = ZhKeywords.HARD[i + 1];
++            TokenKind t = keywords.get(en);
++            if (t == null) {
++                throw new AssertionError("ZhKeywords: unknown English keyword: " + en);
++            }
++            names.fromString(zh);
++            keywords.put(zh, t);
++        }
+     }
+ 
+     /**
+@@ -463,3 +475,4 @@ public int radix() {
+     public static final Token DUMMY =
+                 new Token(TokenKind.ERROR, 0, 0, null);
+ }
++
+diff --git a/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler.properties b/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler.properties
+index f676b7ae4..78d90edc2 100644
+--- a/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler.properties
++++ b/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler.properties
+@@ -4400,3 +4400,9 @@ compiler.err.enclosing.class.type.non.denotable=\
+ 
+ compiler.warn.value.finalize=\
+     value classes should not have a finalizer method, as it is not invoked
++
++
++# ChineseJava：我方新增的诊断键（表：tools\诊断补缺表.tsv 里状态为「我方新增」的行）
++# 英文侧必须有：CreateSymbols 从本文件生成 Errors/Notes 类；中文侧在对应 _zh_CN.properties 里。
++# 0: string
++compiler.err.chinesejava.keyword=''{0}'' is a ChineseJava keyword, and may not be used as an identifier
+diff --git a/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler_zh_CN.properties b/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler_zh_CN.properties
+index befb5f626..24d8f5a5c 100644
+--- a/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler_zh_CN.properties
++++ b/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler_zh_CN.properties
+@@ -93,7 +93,7 @@ compiler.err.abstract.cant.be.instantiated={0}是抽象的; 无法实例化
+ compiler.err.abstract.meth.cant.have.body=抽象方法不能有主体
+ 
+ # 0: kind name, 1: symbol
+-compiler.err.already.annotated={0} {1} 已进行批注
++compiler.err.already.annotated={0} {1} 已进行注解
+ 
+ # 0: kind name, 1: symbol, 2: kind name, 3: symbol
+ compiler.err.already.defined=已在{2} {3}中定义了{0} {1}
+@@ -102,42 +102,42 @@ compiler.err.already.defined=已在{2} {3}中定义了{0} {1}
+ compiler.err.already.defined.in.clinit=已在{3} {4}的{2}中定义了{0} {1}
+ 
+ # 0: symbol
+-compiler.err.already.defined.single.import={0}的 single-type-import 已定义具有相同简名的类型
++compiler.err.already.defined.single.import={0}的 单类型导入 已定义具有相同简单名的类型
+ 
+ # 0: symbol
+-compiler.err.already.defined.static.single.import={0}的静态 single-type-import 已定义具有相同简名的类型
++compiler.err.already.defined.static.single.import={0}的静态 单类型导入 已定义具有相同简单名的类型
+ 
+ # 0: symbol
+ compiler.err.already.defined.this.unit=已在该编译单元中定义{0}
+ 
+-compiler.err.annotation.missing.element.value=批注缺少元素值
++compiler.err.annotation.missing.element.value=注解缺少元素值
+ 
+ # 0: type, 1: list of name
+-compiler.err.annotation.missing.default.value=对于元素 ''{1}'', 批注 @{0} 缺少默认值
++compiler.err.annotation.missing.default.value=对于元素 ''{1}'', 注解 @{0} 缺少默认值
+ 
+ # 0: type, 1: list of name
+-compiler.err.annotation.missing.default.value.1=对于元素{1}, 批注 @{0} 缺少默认值
++compiler.err.annotation.missing.default.value.1=对于元素{1}, 注解 @{0} 缺少默认值
+ 
+ # 0: type
+-compiler.err.annotation.not.valid.for.type=批注对于类型{0}的元素无效
++compiler.err.annotation.not.valid.for.type=注解对于类型{0}的元素无效
+ 
+-compiler.err.annotation.type.not.applicable=批注接口不适用于此类型的声明
++compiler.err.annotation.type.not.applicable=注解接口不适用于此类型的声明
+ 
+ # 0: type
+-compiler.err.annotation.type.not.applicable.to.type=批注 @{0} 在此类型上下文中不适用
++compiler.err.annotation.type.not.applicable.to.type=注解 @{0} 在此类型上下文中不适用
+ 
+-compiler.err.annotation.value.must.be.annotation=批注值必须为批注
++compiler.err.annotation.value.must.be.annotation=注解值必须为注解
+ 
+-compiler.err.annotation.value.must.be.class.literal=批注值必须为类文字
++compiler.err.annotation.value.must.be.class.literal=注解值必须为类文字
+ 
+-compiler.err.annotation.value.must.be.name.value=批注值必须采用 ''name=value'' 格式
++compiler.err.annotation.value.must.be.name.value=注解值必须采用 ''name=value'' 格式
+ 
+-compiler.err.annotation.value.not.allowable.type=批注值不是允许的类型
++compiler.err.annotation.value.not.allowable.type=注解值不是允许的类型
+ 
+-compiler.err.expression.not.allowable.as.annotation.value=表达式不允许用作批注值
++compiler.err.expression.not.allowable.as.annotation.value=表达式不允许用作注解值
+ 
+ # 0: type, 1: name
+-compiler.err.annotation.unrecognized.attribute.name=批注 @{0} 具有名为 ''{1}'' 的未知属性
++compiler.err.annotation.unrecognized.attribute.name=注解 @{0} 具有名为 ''{1}'' 的未知属性
+ 
+ compiler.err.anon.class.impl.intf.no.args=匿名类实现接口; 不能有参数
+ 
+@@ -218,10 +218,10 @@ compiler.misc.no.abstracts=在 {0} {1} 中找不到抽象方法
+ # 0: kind name, 1: symbol
+ compiler.misc.incompatible.abstracts=在 {0} {1} 中找到多个非覆盖抽象方法
+ 
+-compiler.err.bad.functional.intf.anno=意外的 @FunctionalInterface 批注
++compiler.err.bad.functional.intf.anno=意外的 @FunctionalInterface 注解
+ 
+ # 0: message segment
+-compiler.err.bad.functional.intf.anno.1=意外的 @FunctionalInterface 批注\n{0}
++compiler.err.bad.functional.intf.anno.1=意外的 @FunctionalInterface 注解\n{0}
+ 
+ # 0: message segment
+ compiler.err.anonymous.diamond.method.does.not.override.superclass=方法不会覆盖或实现超类型中的方法\n{0}
+@@ -286,7 +286,7 @@ compiler.err.cant.deref=无法取消引用{0}
+ 
+ compiler.err.cant.extend.intf.annotation=对于 @interfaces, 不允许 ''extends''
+ 
+-compiler.err.annotation.decl.not.allowed.here=此处不允许批注接口声明
++compiler.err.annotation.decl.not.allowed.here=此处不允许注解接口声明
+ 
+ # 0: symbol
+ compiler.err.cant.inherit.from.final=无法从最终{0}进行继承
+@@ -330,22 +330,22 @@ compiler.err.no.superclass={0}不具有超类。
+ # 0: symbol, 1: type, 2: symbol, 3: type, 4: type
+ compiler.err.concrete.inheritance.conflict={1}中的方法{0}和{3}中的方法{2}是使用相同的签名继承的
+ 
+-compiler.err.default.allowed.in.intf.annotation.member=批注接口声明中仅允许默认值
++compiler.err.default.allowed.in.intf.annotation.member=注解接口声明中仅允许默认值
+ 
+ # 0: symbol
+ compiler.err.doesnt.exist=程序包{0}不存在
+ 
+ # 0: type
+-compiler.err.duplicate.annotation.invalid.repeated=批注{0}不是有效的可重复批注
++compiler.err.duplicate.annotation.invalid.repeated=注解{0}不是有效的可重复注解
+ 
+ # 0: name, 1: type
+-compiler.err.duplicate.annotation.member.value=批注@{1}中的元素 ''{0}'' 重复。
++compiler.err.duplicate.annotation.member.value=注解@{1}中的元素 ''{0}'' 重复。
+ 
+ # 0: type
+-compiler.err.duplicate.annotation.missing.container={0} 不是可重复的批注接口
++compiler.err.duplicate.annotation.missing.container={0} 不是可重复的注解接口
+ 
+ # 0: symbol
+-compiler.err.invalid.repeatable.annotation=批注重复: 使用无效的 @Repeatable 批注对{0}进行了批注
++compiler.err.invalid.repeatable.annotation=注解重复: 使用无效的 @Repeatable 注解对{0}进行了注解
+ 
+ # 0: symbol or type
+ compiler.err.invalid.repeatable.annotation.no.value={0}不是有效的 @Repeatable, 未声明任何值元素方法
+@@ -357,22 +357,22 @@ compiler.err.invalid.repeatable.annotation.multiple.values={0}不是有效的 @R
+ compiler.err.invalid.repeatable.annotation.invalid.value={0}不是有效的 @Repeatable: 值元素无效
+ 
+ # 0: symbol or type, 1: type, 2: type
+-compiler.err.invalid.repeatable.annotation.value.return=包含批注接口 ({0}) 必须声明类型 {2} 的名为 ''value'' 的元素
++compiler.err.invalid.repeatable.annotation.value.return=包含注解接口 ({0}) 必须声明类型 {2} 的名为 ''value'' 的元素
+ 
+ # 0: symbol or type, 1: symbol
+-compiler.err.invalid.repeatable.annotation.elem.nondefault=包含批注接口 ({0}) 没有元素 {1} 的默认值
++compiler.err.invalid.repeatable.annotation.elem.nondefault=包含注解接口 ({0}) 没有元素 {1} 的默认值
+ 
+ # 0: symbol, 1: string, 2: symbol, 3: string
+-compiler.err.invalid.repeatable.annotation.retention=包含批注接口 ({0}) 的保留期短于可重复批注接口 ({2}) 的保留期
++compiler.err.invalid.repeatable.annotation.retention=包含注解接口 ({0}) 的保留期短于可重复注解接口 ({2}) 的保留期
+ 
+ # 0: symbol, 1: symbol
+-compiler.err.invalid.repeatable.annotation.not.documented=可重复批注接口 ({1}) 是 @Documented，而包含批注接口 ({0}) 则不是
++compiler.err.invalid.repeatable.annotation.not.documented=可重复注解接口 ({1}) 是 @Documented，而包含注解接口 ({0}) 则不是
+ 
+ # 0: symbol, 1: symbol
+-compiler.err.invalid.repeatable.annotation.not.inherited=可重复批注接口 ({1}) 是 @Inherited，而包含批注接口 ({0}) 则不是
++compiler.err.invalid.repeatable.annotation.not.inherited=可重复注解接口 ({1}) 是 @Inherited，而包含注解接口 ({0}) 则不是
+ 
+ # 0: symbol, 1: symbol
+-compiler.err.invalid.repeatable.annotation.incompatible.target=包含批注接口 ({0}) 适用的目标多于可重复批注接口 ({1})
++compiler.err.invalid.repeatable.annotation.incompatible.target=包含注解接口 ({0}) 适用的目标多于可重复注解接口 ({1})
+ 
+ # 0: symbol
+ compiler.err.invalid.repeatable.annotation.repeated.and.container.present=容器 {0} 不得与其包含的元素同时存在
+@@ -437,7 +437,7 @@ compiler.err.empty.char.lit=空字符文字
+ # 0: symbol
+ compiler.err.encl.class.required=需要包含{0}的封闭实例
+ 
+-compiler.err.enum.annotation.must.be.enum.constant=枚举批注值必须是枚举常量
++compiler.err.enum.annotation.must.be.enum.constant=枚举注解值必须是枚举常量
+ 
+ compiler.err.enum.cant.be.instantiated=无法实例化枚举类
+ 
+@@ -573,21 +573,21 @@ compiler.err.incomparable.types=不可比较的类型: {0}和{1}
+ # 0: string
+ compiler.err.int.number.too.large=整数太大
+ 
+-compiler.err.intf.annotation.members.cant.have.params=批注接口声明中的元素无法声明形参
++compiler.err.intf.annotation.members.cant.have.params=注解接口声明中的元素无法声明形参
+ 
+ # 0: symbol
+-compiler.err.intf.annotation.cant.have.type.params=批注接口 {0} 不能为泛型
++compiler.err.intf.annotation.cant.have.type.params=注解接口 {0} 不能为泛型
+ 
+-compiler.err.intf.annotation.members.cant.have.type.params=批注接口声明中的元素不能为泛型方法
++compiler.err.intf.annotation.members.cant.have.type.params=注解接口声明中的元素不能为泛型方法
+ 
+ # 0: symbol, 1: type
+-compiler.err.intf.annotation.member.clash=批注接口 {1} 声明的元素与方法 {0} 同名
++compiler.err.intf.annotation.member.clash=注解接口 {1} 声明的元素与方法 {0} 同名
+ 
+ compiler.err.intf.expected.here=此处需要接口
+ 
+ compiler.err.intf.meth.cant.have.body=接口抽象方法不能带有主体
+ 
+-compiler.err.invalid.annotation.member.type=批注接口元素的类型无效
++compiler.err.invalid.annotation.member.type=注解接口元素的类型无效
+ 
+ compiler.err.invalid.binary.number=二进制数字中必须包含至少一个二进制数
+ 
+@@ -642,7 +642,7 @@ compiler.err.limit.stack=代码需要过多堆栈
+ compiler.err.limit.string=常量字符串过长
+ 
+ # 0: symbol
+-compiler.err.annotation.array.too.large="{0}" 中的批注数组元素太大
++compiler.err.annotation.array.too.large="{0}" 中的注解数组元素太大
+ 
+ # 0: string
+ compiler.err.limit.string.overflow=对于常量池来说, 字符串 "{0}..." 的 UTF8 表示过长
+@@ -653,7 +653,7 @@ compiler.err.malformed.fp.lit=浮点文字的格式错误
+ compiler.err.method.does.not.override.superclass={1} 中的 {0} 不会覆盖或实现超类型中的方法
+ 
+ # 0: symbol, 1: symbol
+-compiler.err.static.methods.cannot.be.annotated.with.override=不能使用 @Override 对 {1} 中的静态方法 {0} 进行批注
++compiler.err.static.methods.cannot.be.annotated.with.override=不能使用 @Override 对 {1} 中的静态方法 {0} 进行注解
+ 
+ # 0: symbol, 1: symbol
+ compiler.err.missing.meth.body.or.decl.abstract={1} 中的方法 {0} 缺少方法主体，或者应声明为抽象方法
+@@ -718,10 +718,10 @@ compiler.misc.wrong.number.args.in.lambda=函数接口 {0} 的 lambda 表达式
+ 
+ compiler.misc.incompatible.arg.types.in.mref=方法引用中的参数类型不兼容
+ 
+-compiler.err.new.not.allowed.in.annotation=批注中不允许使用 ''new''
++compiler.err.new.not.allowed.in.annotation=注解中不允许使用 ''new''
+ 
+ # 0: name, 1: type
+-compiler.err.no.annotation.member={1}中没有批注成员{0}
++compiler.err.no.annotation.member={1}中没有注解成员{0}
+ 
+ # 0: symbol
+ compiler.err.no.encl.instance.of.type.in.scope=作用域中没有类型为{0}的封闭实例
+@@ -731,7 +731,7 @@ compiler.err.no.intf.expected.here=此处不需要接口
+ compiler.err.no.match.entry={0}在{1}的条目中没有匹配项; 需要{2}
+ 
+ # 0: type
+-compiler.err.not.annotation.type={0} 不是批注接口
++compiler.err.not.annotation.type={0} 不是注解接口
+ 
+ # 0: symbol, 1: symbol, 2: message segment
+ compiler.err.not.def.access.package.cant.access={0} 不可见\n({2})
+@@ -817,7 +817,7 @@ compiler.err.operator.cant.be.applied=一元运算符 ''{0}'' 的操作数类型
+ # 0: name, 1: type, 2: type
+ compiler.err.operator.cant.be.applied.1=二元运算符 ''{0}'' 的操作数类型错误\n第一个类型:  {1}\n第二个类型: {2}
+ 
+-compiler.err.pkg.annotations.sb.in.package-info.java=程序包批注应在文件 package-info.java 中
++compiler.err.pkg.annotations.sb.in.package-info.java=程序包注解应在文件 package-info.java 中
+ 
+ compiler.err.no.pkg.in.module-info.java=文件 module-info.java 中不允许使用程序包声明
+ 
+@@ -850,7 +850,7 @@ compiler.misc.exception.message={0}
+ compiler.misc.user.selected.completion.failure=按类名列出的用户选择输入提示失败
+ 
+ # 0: collection of string
+-compiler.err.proc.no.explicit.annotation.processing.requested=仅当显式请求批注处理时才接受类名称 ''{0}''
++compiler.err.proc.no.explicit.annotation.processing.requested=仅当显式请求注解处理时才接受类名称 ''{0}''
+ 
+ # 0: string, 1: string
+ compiler.err.proc.processor.bad.option.name=处理程序 ''{1}'' 提供的选项名称 ''{0}'' 错误
+@@ -859,17 +859,17 @@ compiler.err.proc.processor.bad.option.name=处理程序 ''{1}'' 提供的选项
+ compiler.err.proc.processor.cant.instantiate=无法实例化处理程序 ''{0}'' 的实例
+ 
+ # 0: string
+-compiler.err.proc.processor.not.found=找不到批注处理程序 ''{0}''
++compiler.err.proc.processor.not.found=找不到注解处理程序 ''{0}''
+ 
+ # 0: string
+-compiler.err.proc.processor.wrong.type=批注处理程序 ''{0}'' 未实现 javax.annotation.processing.Processor
++compiler.err.proc.processor.wrong.type=注解处理程序 ''{0}'' 未实现 javax.annotation.processing.Processor
+ 
+ compiler.err.proc.service.problem=创建服务加载器以加载处理程序时出错。
+ 
+ # 0: string
+ compiler.err.proc.bad.config.file=服务配置文件不正确, 或构造处理程序对象{0}时抛出异常错误
+ 
+-compiler.err.proc.cant.create.loader=无法为批注处理程序{0}创建类加载器
++compiler.err.proc.cant.create.loader=无法为注解处理程序{0}创建类加载器
+ 
+ # 0: symbol
+ compiler.err.qualified.new.of.static.class=限定的新静态类
+@@ -882,7 +882,7 @@ compiler.err.ref.ambiguous=对{0}的引用不明确\n{3} 中的{1} {2} 和 {6} 
+ # 0: name, 1: symbol kind, 2: symbol, 3: symbol, 4: symbol kind, 5: symbol, 6: symbol
+ compiler.misc.ref.ambiguous=对{0}的引用不明确\n{3} 中的{1} {2} 和 {6} 中的{4} {5} 都匹配
+ 
+-compiler.err.repeated.annotation.target=批注目标重复
++compiler.err.repeated.annotation.target=注解目标重复
+ 
+ compiler.err.repeated.interface=接口重复
+ 
+@@ -1094,7 +1094,7 @@ compiler.err.var.not.initialized.in.default.constructor=变量 {0} 未在默认
+ compiler.err.var.might.be.assigned.in.loop=可能在 loop 中分配了变量{0}
+ 
+ # 0: symbol, 1: message segment
+-compiler.err.varargs.invalid.trustme.anno={0} 批注无效。{1}
++compiler.err.varargs.invalid.trustme.anno={0} 注解无效。{1}
+ 
+ # 0: type
+ compiler.misc.varargs.trustme.on.reifiable.varargs=Varargs 元素类型{0}可具体化。
+@@ -1129,7 +1129,7 @@ compiler.err.class.public.should.be.in.file={0} {1} 是公共的, 应在名为 {
+ 
+ ## All errors which do not refer to a particular line in the source code are
+ ## preceded by this string.
+-compiler.err.error=错误:\u0020
++compiler.err.error=error:\u0020
+ 
+ # The following error messages do not refer to a line in the source code.
+ compiler.err.cant.read.file=无法读取: {0}
+@@ -1174,7 +1174,7 @@ compiler.err.no.java.lang=在平台类中找不到程序包 java.lang
+ 
+ compiler.err.statement.not.expected=语句不应在方法和初始化程序外部
+ 
+-compiler.err.class.method.or.field.expected=需要类、接口、批注类型、枚举、记录、方法或字段
++compiler.err.class.method.or.field.expected=需要类、接口、注解类型、枚举、记录、方法或字段
+ 
+ #####
+ 
+@@ -1205,7 +1205,7 @@ compiler.misc.source.unavailable=(源不可用)
+ compiler.misc.x.print.processor.info=处理程序{0}与{1}匹配并返回{2}。
+ 
+ # 0: number, 1: string, 2: set of symbol, 3: boolean
+-compiler.misc.x.print.rounds=循环 {0}:\n\t输入文件: {1}\n\t批注: {2}\n\t最后一个循环: {3}
++compiler.misc.x.print.rounds=循环 {0}:\n\t输入文件: {1}\n\t注解: {2}\n\t最后一个循环: {3}
+ 
+ # 0: file name
+ compiler.warn.file.from.future=文件 {0} 的修改日期是未来的日期
+@@ -1233,7 +1233,7 @@ compiler.note.mref.stat.1=转换方法引用\n替代 metafactory = {0}\nbridge 
+ # 0: string, 1: string, 2: string, 3: number, 4: string, 5: string, 6: string, 7: string
+ compiler.note.lambda.deserialization.stat=正在生成 lambda 反序列化\nfunctionalInterfaceClass：{0}\nfunctionalInterfaceMethodName：{1}\nfunctionalInterfaceMethodSignature：{2}\nimplMethodKind：{3}\nimplClass：{4}\nimplMethodName：{5}\nimplMethodSignature：{6}\ninstantiatedMethodType：{7}
+ 
+-compiler.note.note=注:\u0020
++compiler.note.note=note:\u0020
+ 
+ # 0: file name
+ compiler.note.deprecated.filename={0}使用或覆盖了已过时的 API。
+@@ -1300,7 +1300,7 @@ compiler.note.proc.messager={0}
+ # 0: string, 1: string, 2: string
+ compiler.note.multiple.elements=通过 javax.lang.model.util.Elements.{0} 在模块 ''{2}'' 中找到了多个名为 ''{1}'' 的元素。
+ 
+-compiler.note.implicit.annotation.processing=由于在类路径中发现了一个或多个处理程序，因此启用了\n批注处理。未来发行版的 javac 可能会禁用批注处理，\n除非至少按名称指定了一个处理程序 (-processor)，\n或指定了搜索路径 (--processor-path, --processor-module-path)，\n或显式启用了批注处理 (-proc:only, -proc:full)。\n可使用 -Xlint:-options 隐藏此消息。\n可使用 -proc:none 禁用批注处理。
++compiler.note.implicit.annotation.processing=由于在类路径中发现了一个或多个处理程序，因此启用了\n注解处理。未来发行版的 javac 可能会禁用注解处理，\n除非至少按名称指定了一个处理程序 (-processor)，\n或指定了搜索路径 (--processor-path, --processor-module-path)，\n或显式启用了注解处理 (-proc:only, -proc:full)。\n可使用 -Xlint:-options 隐藏此消息。\n可使用 -proc:none 禁用注解处理。
+ 
+ #####
+ 
+@@ -1361,7 +1361,7 @@ compiler.misc.resume.abort=继续(R), 放弃(A)>
+ ##
+ 
+ ## All warning messages are preceded by the following string.
+-compiler.warn.warning=警告:\u0020
++compiler.warn.warning=warning:\u0020
+ 
+ ## Warning messages may also include the following prefix to identify a
+ ## lint option
+@@ -1687,44 +1687,44 @@ compiler.warn.proc.illegal.file.name=无法创建带有非法名称 ''{0}'' 的
+ compiler.warn.proc.suspicious.class.name=正在为名称以{1}结尾的类型创建文件: ''{0}''
+ 
+ # 0: string
+-compiler.warn.proc.file.create.last.round=将不对在最后一个循环中创建的类型为 ''{0}'' 的文件进行批注处理。
++compiler.warn.proc.file.create.last.round=将不对在最后一个循环中创建的类型为 ''{0}'' 的文件进行注解处理。
+ 
+ # 0: string, 1: string
+ # lint: processing
+-compiler.warn.proc.malformed.supported.string=处理程序 ''{1}'' 为支持的批注接口返回格式错误的字符串 ''{0}''
++compiler.warn.proc.malformed.supported.string=处理程序 ''{1}'' 为支持的注解接口返回格式错误的字符串 ''{0}''
+ 
+ # 0: set of string
+ # lint: processing
+-compiler.warn.proc.annotations.without.processors=没有处理程序要使用以下任何批注: {0}
++compiler.warn.proc.annotations.without.processors=没有处理程序要使用以下任何注解: {0}
+ 
+ # 0: source version, 1: string, 2: string
+-compiler.warn.proc.processor.incompatible.source.version=来自批注处理程序 ''{1}'' 的受支持 source 版本 ''{0}'' 低于 -source ''{2}''
++compiler.warn.proc.processor.incompatible.source.version=来自注解处理程序 ''{1}'' 的受支持 source 版本 ''{0}'' 低于 -source ''{2}''
+ 
+ # 0: string, 1: string
+ # lint: processing
+-compiler.warn.proc.duplicate.option.name=批注处理程序 ''{1}'' 返回重复的支持的选项 ''{0}''
++compiler.warn.proc.duplicate.option.name=注解处理程序 ''{1}'' 返回重复的支持的选项 ''{0}''
+ 
+ # 0: string, 1: string
+ # lint: processing
+-compiler.warn.proc.duplicate.supported.annotation=批注处理程序 ''{1}'' 返回重复的受支持批注接口 ''{0}''
++compiler.warn.proc.duplicate.supported.annotation=注解处理程序 ''{1}'' 返回重复的受支持注解接口 ''{0}''
+ 
+ 
+ # 0: string
+ # lint: processing
+-compiler.warn.proc.redundant.types.with.wildcard=批注处理程序 ''{0}'' 重复支持 ''*'' 和其他批注接口
++compiler.warn.proc.redundant.types.with.wildcard=注解处理程序 ''{0}'' 重复支持 ''*'' 和其他注解接口
+ 
+-compiler.warn.proc.proc-only.requested.no.procs=在未请求编译的情况下进行批注处理, 但找不到处理程序。
++compiler.warn.proc.proc-only.requested.no.procs=在未请求编译的情况下进行注解处理, 但找不到处理程序。
+ 
+-compiler.warn.proc.use.implicit=批注处理不适用于隐式编译的文件。\n使用 -implicit 指定用于隐式编译的策略。
++compiler.warn.proc.use.implicit=注解处理不适用于隐式编译的文件。\n使用 -implicit 指定用于隐式编译的策略。
+ 
+-compiler.warn.proc.use.proc.or.implicit=批注处理不适用于隐式编译的文件。\n使用 -proc:none 禁用批注处理或使用 -implicit 指定用于隐式编译的策略。
++compiler.warn.proc.use.proc.or.implicit=注解处理不适用于隐式编译的文件。\n使用 -proc:none 禁用注解处理或使用 -implicit 指定用于隐式编译的策略。
+ 
+ # Print a client-generated warning; assumed to be localized, no translation required
+ # 0: string
+ compiler.warn.proc.messager={0}
+ 
+ # 0: set of string
+-compiler.warn.proc.unclosed.type.files=类型 ''{0}'' 的文件未关闭; 将不针对这些类型进行批注处理
++compiler.warn.proc.unclosed.type.files=类型 ''{0}'' 的文件未关闭; 将不针对这些类型进行注解处理
+ 
+ # 0: string
+ compiler.warn.proc.unmatched.processor.options=以下选项未被任何处理程序识别: ''{0}''
+@@ -1780,11 +1780,11 @@ compiler.warn.unchecked.varargs.non.reifiable.type=参数化 vararg 类型{0}的
+ compiler.warn.varargs.unsafe.use.varargs.param=Varargs 方法可能导致来自不可具体化 varargs 参数 {0} 的堆污染
+ 
+ # lint: dep-ann
+-compiler.warn.missing.deprecated.annotation=未使用 @Deprecated 对已过时的项目进行批注
++compiler.warn.missing.deprecated.annotation=未使用 @Deprecated 对已过时的项目进行注解
+ 
+ # 0: kind name
+ # lint: deprecation
+-compiler.warn.deprecated.annotation.has.no.effect=@Deprecated 批注对此 {0} 声明没有任何效果
++compiler.warn.deprecated.annotation.has.no.effect=@Deprecated 注解对此 {0} 声明没有任何效果
+ 
+ # 0: string
+ # lint: path
+@@ -1819,14 +1819,14 @@ compiler.warn.empty.if=if 之后没有语句
+ 
+ # 0: type, 1: name
+ # lint: classfile
+-compiler.warn.annotation.method.not.found=无法找到类型 ''{0}'' 的批注方法 ''{1}()''
++compiler.warn.annotation.method.not.found=无法找到类型 ''{0}'' 的注解方法 ''{1}()''
+ 
+ # 0: type, 1: name, 2: message segment
+ # lint: classfile
+-compiler.warn.annotation.method.not.found.reason=无法找到类型 ''{0}'' 的批注方法 ''{1}()'': {2}
++compiler.warn.annotation.method.not.found.reason=无法找到类型 ''{0}'' 的注解方法 ''{1}()'': {2}
+ 
+ # 0: list of annotation, 1: symbol, 2: name, 3: message segment
+-compiler.err.cant.attach.type.annotations=无法将类型批注 {0} 附加到 {1}.{2}：\n{3}
++compiler.err.cant.attach.type.annotations=无法将类型注解 {0} 附加到 {1}.{2}：\n{3}
+ 
+ # 0: file object, 1: symbol, 2: name
+ # lint: classfile
+@@ -1850,7 +1850,7 @@ compiler.warn.method.redundant.typeargs=方法调用中存在冗余类型参数
+ 
+ # 0: symbol, 1: message segment
+ # lint: varargs
+-compiler.warn.varargs.redundant.trustme.anno=冗余的 {0} 批注。{1}
++compiler.warn.varargs.redundant.trustme.anno=冗余的 {0} 注解。{1}
+ 
+ # 0: symbol
+ # lint: serial
+@@ -1991,7 +1991,7 @@ compiler.misc.bad.class.truncated.at.offset=类文件在偏移 {0} 处截断
+ 
+ compiler.misc.bad.signature=错误的签名: {0}
+ 
+-compiler.misc.bad.type.annotation.value=错误的类型批注目标类型值: {0}
++compiler.misc.bad.type.annotation.value=错误的类型注解目标类型值: {0}
+ 
+ compiler.misc.bad.module-info.name=错误的类名
+ 
+@@ -2501,13 +2501,13 @@ compiler.err.this.as.identifier=从发行版 8 开始，''this'' 只能作为接
+ compiler.err.receiver.parameter.not.applicable.constructor.toplevel.class=接收方参数不适用于顶层类的构造器
+ 
+ # 0: fragment, 1: symbol, 2: annotated-type
+-compiler.err.type.annotation.inadmissible={0} 不应出现在此处\n（要对限定类型进行批注，请编写 {1}.{2}）
++compiler.err.type.annotation.inadmissible={0} 不应出现在此处\n（要对限定类型进行注解，请编写 {1}.{2}）
+ 
+ # 0: annotation
+-compiler.misc.type.annotation.1=类型批注 {0} 为
++compiler.misc.type.annotation.1=类型注解 {0} 为
+ 
+ # 0: list of annotation
+-compiler.misc.type.annotation=类型批注 {0} 为
++compiler.misc.type.annotation=类型注解 {0} 为
+ 
+ # 0: type, 1: type
+ compiler.err.incorrect.receiver.name=接收方名称与封闭类类型不匹配\n需要: {0}\n找到:    {1}
+@@ -2521,7 +2521,7 @@ compiler.err.incorrect.constructor.receiver.type=接收方类型与外部封闭
+ # 0: type, 1: type
+ compiler.err.incorrect.constructor.receiver.name=接收方名称与外部封闭类类型不匹配\n需要: {0}\n找到:    {1}
+ 
+-compiler.err.no.annotations.on.dot.class=类文字类型中不允许使用任何批注
++compiler.err.no.annotations.on.dot.class=类文字类型中不允许使用任何注解
+ 
+ ########################################
+ # Diagnostics for verbose resolution
+@@ -2685,7 +2685,7 @@ compiler.err.dc.unterminated.signature=未终止的签名
+ 
+ compiler.err.dc.unterminated.string=未终止的字符串
+ 
+-compiler.err.dc.ref.annotations.not.allowed=不允许使用批注
++compiler.err.dc.ref.annotations.not.allowed=不允许使用注解
+ 
+ ###
+ # errors related to modules
+@@ -3004,7 +3004,7 @@ compiler.err.instance.initializer.not.allowed.in.records=记录中不允许使
+ 
+ compiler.err.static.declaration.not.allowed.in.inner.classes=内部类中不允许使用静态声明
+ 
+-compiler.err.record.patterns.annotations.not.allowed=记录模式不允许使用批注
++compiler.err.record.patterns.annotations.not.allowed=记录模式不允许使用注解
+ 
+ ############################################
+ # messages previously at javac.properties
+@@ -3012,7 +3012,7 @@ compiler.err.record.patterns.annotations.not.allowed=记录模式不允许使用
+ compiler.err.empty.A.argument=-A 需要一个参数; 使用 ''-Akey'' 或 ''-Akey=value''
+ 
+ # 0: string
+-compiler.err.invalid.A.key=批注处理程序选项 ''{0}'' 中的关键字不是以点分隔的标识符序列
++compiler.err.invalid.A.key=注解处理程序选项 ''{0}'' 中的关键字不是以点分隔的标识符序列
+ 
+ # 0: string
+ compiler.err.invalid.flag=无效的标记: {0}
+@@ -3118,3 +3118,18 @@ compiler.warn.attempt.to.use.value.based.where.identity.expected=使用基于值
+ 
+ # 0: type
+ compiler.err.enclosing.class.type.non.denotable=封闭类类型：{0}\n是不可指示的类型，尝试转换为可指示的类型
++
++# ChineseJava：上游 zh_CN 缺失的键（表：tools\诊断补缺表.tsv）
++compiler.err.chinesejava.keyword={0} 是 ChineseJava 关键字, 不能用作标识符（可改用对应的英文拼写, 或换个名字）
++compiler.misc.illegal.tvar.bound=非法的类型变量限制范围: {0}
++compiler.err.value.type.has.identity.super.type=身份类型 {1} 不能作为值类型 {0} 的超类
++compiler.misc.missing.cases=缺少 case:
++compiler.misc.missing.case=缺少 case:
++compiler.misc.feature.value.classes=值类
++compiler.misc.type.req.identity=身份类
++compiler.err.strict.field.not.have.been.initialized.before.super=在调用超类构造器之前，严格字段 {0} 尚未初始化
++compiler.err.non.abstract.value.class.cant.be.sealed.or.non.sealed=''sealed'' 或 ''non-sealed'' 修饰符只适用于抽象值类
++compiler.warn.serializable.value.class.without.write.replace.2=可序列化类未声明或未继承 writeReplace 方法
++compiler.warn.value.finalize=值类不应有 finalize 方法，因为它不会被调用
++compiler.warn.serializable.value.class.without.write.replace.1=可序列化的值类未声明或未继承 writeReplace 方法
++compiler.warn.ineffectual.serial.method.value.class=与序列化相关的方法 ''{0}'' 在值类中无效
+diff --git a/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/javac_zh_CN.properties b/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/javac_zh_CN.properties
+index 1d1d7250c..7b287ecb1 100644
+--- a/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/javac_zh_CN.properties
++++ b/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/javac_zh_CN.properties
+@@ -35,7 +35,7 @@ javac.opt.g.lines.vars.source=只生成某些调试信息
+ javac.opt.nowarn=仅生成必需警告
+ javac.opt.verbose=输出有关编译器正在执行的操作的消息
+ javac.opt.deprecation=输出使用已过时的 API 的源位置
+-javac.opt.classpath=指定查找用户类文件和批注处理程序的位置
++javac.opt.classpath=指定查找用户类文件和注解处理程序的位置
+ javac.opt.modulepath=指定查找应用程序模块的位置
+ javac.opt.sourcepath=指定查找输入源文件的位置
+ javac.opt.m=只编译指定的模块，请检查时间戳
+@@ -45,11 +45,11 @@ javac.opt.system=覆盖系统模块位置
+ javac.opt.upgrademodulepath=覆盖可升级模块位置
+ javac.opt.endorseddirs=覆盖签名的标准路径的位置
+ javac.opt.extdirs=覆盖所安装扩展的位置
+-javac.opt.processorpath=指定查找批注处理程序的位置
+-javac.opt.processormodulepath=指定查找批注处理程序的模块路径
+-javac.opt.processor=要运行的批注处理程序的名称;\n绕过默认的搜索进程
++javac.opt.processorpath=指定查找注解处理程序的位置
++javac.opt.processormodulepath=指定查找注解处理程序的模块路径
++javac.opt.processor=要运行的注解处理程序的名称;\n绕过默认的搜索进程
+ javac.opt.parameters=生成元数据以用于方法参数的反射
+-javac.opt.proc.none.only=控制是否执行批注处理和/或编译。
++javac.opt.proc.none.only=控制是否执行注解处理和/或编译。
+ javac.opt.d=指定放置生成的类文件的位置
+ javac.opt.sourceDest=指定放置生成的源文件的位置
+ javac.opt.headerDest=指定放置生成的头文件的位置
+@@ -62,7 +62,7 @@ javac.opt.source=提供与指定的 Java SE 发行版的源兼容性。支持的
+ javac.opt.Werror=出现任何警告时终止编译
+ javac.opt.arg.Werror=<键>(,<键>)*
+ javac.opt.Werror.custom=指定出现警告时应终止编译的 lint 类别，\n以逗号分隔。\n在关键字前面加上 ''-'' 可排除指定的类别。\n使用 --help-lint 可查看支持的关键字。
+-javac.opt.A=传递给批注处理程序的选项
++javac.opt.A=传递给注解处理程序的选项
+ javac.opt.implicit=指定是否为隐式引用文件生成类文件
+ javac.opt.pkginfo=指定 package-info 文件的处理
+ javac.opt.multi-release=指定在多发行版 jar 中使用哪个发行版
+@@ -117,7 +117,7 @@ javac.opt.Xlint.desc.missing-explicit-ctor=有关导出的程序包中的公共
+ 
+ javac.opt.Xlint.desc.deprecation=有关使用了已过时项的警告。
+ 
+-javac.opt.Xlint.desc.dep-ann=有关项在 JavaDoc 中标记为已过时但未使用 @Deprecated 批注的警告。
++javac.opt.Xlint.desc.dep-ann=有关项在 JavaDoc 中标记为已过时但未使用 @Deprecated 注解的警告。
+ 
+ javac.opt.Xlint.desc.divzero=有关除以常量整数 0 的警告。
+ 
+@@ -147,7 +147,7 @@ javac.opt.Xlint.desc.overrides=有关与方法覆盖相关的问题的警告。
+ 
+ javac.opt.Xlint.desc.path=有关命令行上的路径元素无效的警告。
+ 
+-javac.opt.Xlint.desc.processing=有关与批注处理相关的问题的警告。
++javac.opt.Xlint.desc.processing=有关与注解处理相关的问题的警告。
+ 
+ javac.opt.Xlint.desc.rawtypes=有关使用了原始类型的警告。
+ 
+@@ -201,8 +201,8 @@ javac.opt.help.lint.header=-Xlint 支持的关键字包括：
+ javac.opt.help.lint.enabled.by.default=默认情况下会启用以下 lint 警告类别：
+ javac.opt.help.lint.footer=类别及其别名可以互换使用；例如，标记\n''-Xlint:{0},{1}'' 将是冗余的。
+ javac.opt.print=输出指定类型的文本表示
+-javac.opt.printRounds=输出有关批注处理循环的信息
+-javac.opt.printProcessorInfo=输出有关请求处理程序处理哪些批注的信息
++javac.opt.printRounds=输出有关注解处理循环的信息
++javac.opt.printProcessorInfo=输出有关请求处理程序处理哪些注解的信息
+ javac.opt.userpathsfirst=在引导类路径之前而不是之后搜索类的类路径和源路径
+ javac.opt.prefer=指定读取文件, 当同时找到隐式编译类的源文件和类文件时
+ # L10N: do not localize: ''preview''
+@@ -222,7 +222,7 @@ javac.opt.arg.limitmods=<模块>(,<模块>)*
+ javac.opt.module.version=指定正在编译的模块版本
+ javac.opt.arg.module.version=<版本>
+ javac.opt.inherit_runtime_environment=从运行时环境继承模块系统配置选项。
+-javac.opt.default.module.for.created.files=由批注处理程序创建的文件的备用目标模块 (如果未指定或推断任何模块)。
++javac.opt.default.module.for.created.files=由注解处理程序创建的文件的备用目标模块 (如果未指定或推断任何模块)。
+ javac.opt.lineDocComments=禁用对带有以 ''///'' 开头的行的文档注释的支持
+ 
+ ## messages
+@@ -237,7 +237,7 @@ javac.msg.bug=编译器 ({0}) 中出现异常错误。如果在 Bug Database (ht
+ 
+ javac.msg.io=\n\n发生输入/输出错误。\n有关详细信息, 请参阅以下堆栈跟踪。\n
+ 
+-javac.msg.proc.annotation.uncaught.exception=\n\n批注处理程序抛出未捕获的异常错误。\n有关详细信息, 请参阅以下堆栈跟踪。\n
++javac.msg.proc.annotation.uncaught.exception=\n\n注解处理程序抛出未捕获的异常错误。\n有关详细信息, 请参阅以下堆栈跟踪。\n
+ 
+ javac.msg.plugin.uncaught.exception=\n\n插件抛出未捕获的异常错误。\n有关详细信息, 请参阅以下堆栈跟踪。\n
+ 
+@@ -249,3 +249,7 @@ javac.fullVersion={0}完整版本 "{1}"
+ javac.msg.parameters.output=正在将 javac 参数打印到：{0}
+ 
+ javac.msg.parameters.output.error=尝试将 javac 参数打印到 {0} 时出错，参数将采用：
++
++# ChineseJava：上游 zh_CN 缺失的键（表：tools\诊断补缺表.tsv）
++javac.opt.preview-mode=指定是否应启用预览功能
++javac.opt.arg.preview-mode=true/false
+diff --git a/src/jdk.compiler/share/classes/com/sun/tools/javac/util/AbstractDiagnosticFormatter.java b/src/jdk.compiler/share/classes/com/sun/tools/javac/util/AbstractDiagnosticFormatter.java
+index 03657fb38..4d4136f1e 100644
+--- a/src/jdk.compiler/share/classes/com/sun/tools/javac/util/AbstractDiagnosticFormatter.java
++++ b/src/jdk.compiler/share/classes/com/sun/tools/javac/util/AbstractDiagnosticFormatter.java
+@@ -110,14 +110,51 @@ protected AbstractDiagnosticFormatter(JavacMessages messages, SimpleConfiguratio
+     public String formatKind(JCDiagnostic d, Locale l) {
+         switch (d.getType()) {
+             case FRAGMENT: return "";
+-            case NOTE:     return localize(l, "compiler.note.note");
+-            case WARNING:  return localize(l, "compiler.warn.warning");
+-            case ERROR:    return localize(l, "compiler.err.error");
++            case NOTE:     return formatKindPrefix(l, "compiler.note.note", "chinesejava.note.note");
++            case WARNING:  return formatKindPrefix(l, "compiler.warn.warning", "chinesejava.warn.warning");
++            case ERROR:    return formatKindPrefix(l, "compiler.err.error", "chinesejava.err.error");
+             default:
+                 throw new AssertionError("Unknown diagnostic type: " + d.getType());
+         }
+     }
+ 
++    /**
++     * ChineseJava：诊断前缀默认走**英文**，以保住工具链解析
++     * （编辑器问题面板 / 构建工具 / CI 日志解析都认 error: / warning: / note:）。
++     * 设系统属性 -Dchinesejava.diagnostics.prefix=zh（或环境变量 CHINESEJAVA_PREFIX=zh）
++     * 时改用中文前缀（错误: / 警告: / 注:）。
++     */
++    private String formatKindPrefix(Locale l, String englishKey, String chineseKey) {
++        String pref = System.getProperty("chinesejava.diagnostics.prefix");
++        if (pref == null) {
++            pref = System.getenv("CHINESEJAVA_PREFIX");
++        }
++        if (pref != null && pref.equalsIgnoreCase("zh")) {
++            String zh = zhPrefix(chineseKey);
++            if (zh != null && !zh.isEmpty()) {
++                return zh;
++            }
++        }
++        return localize(l, englishKey);
++    }
++
++    /**
++     * ChineseJava：中文前缀取自**自建基础资源包** com.sun.tools.javac.resources.chinesejava。
++     * 为什么不放进 compiler.properties / compiler_zh_CN.properties：
++     * 这三个键不是诊断正文；而且只放 zh_CN 的话，英文 locale 下按默认 locale 取包的
++     * 上游检查（CheckExamples / CheckResourceKeys）看不见它们（实测会红）。
++     * 放在无 locale 后缀的基础包里，任何 locale 都继承得到。
++     */
++    private static String zhPrefix(String key) {
++        try {
++            return java.util.ResourceBundle
++                    .getBundle("com.sun.tools.javac.resources.chinesejava")
++                    .getString(key);
++        } catch (java.util.MissingResourceException e) {
++            return null;   // 包或键缺失 ⇒ 回落到英文前缀
++        }
++    }
++
+     @Override
+     public String format(JCDiagnostic d, Locale locale) {
+         allCaptured = List.nil();
+diff --git a/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/formats/html/resources/standard_zh_CN.properties b/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/formats/html/resources/standard_zh_CN.properties
+index f1e14ebed..34ca113df 100644
+--- a/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/formats/html/resources/standard_zh_CN.properties
++++ b/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/formats/html/resources/standard_zh_CN.properties
+@@ -42,12 +42,12 @@ doclet.Interface_Hierarchy=接口分层结构
+ doclet.Enum_Hierarchy=枚举分层结构
+ doclet.Enum_Class_Hierarchy=枚举类分层结构
+ doclet.Record_Class_Hierarchy=记录类分层结构
+-doclet.Annotation_Type_Hierarchy=批注类型分层结构
+-doclet.Annotation_Interface_Hierarchy=批注接口分层结构
++doclet.Annotation_Type_Hierarchy=注解类型分层结构
++doclet.Annotation_Interface_Hierarchy=注解接口分层结构
+ doclet.Href_Class_Title={0}中的类
+ doclet.Href_Interface_Title={0}中的接口
+-doclet.Href_Annotation_Title={0}中的批注
+-doclet.Href_Annotation_Interface_Title={0} 中的批注接口
++doclet.Href_Annotation_Title={0}中的注解
++doclet.Href_Annotation_Interface_Title={0} 中的注解接口
+ doclet.Href_Enum_Title={0}中的枚举
+ doclet.Href_Enum_Class_Title={0} 中的枚举类
+ doclet.Href_Type_Param_Title={0}中的类型参数
+@@ -144,14 +144,14 @@ doclet.searchTagsSummary=搜索标记概要
+ doclet.Terminally_Deprecated=最终已过时
+ doclet.Terminally_Deprecated_Elements=最终已过时的元素
+ doclet.Terminally_Deprecated_In_Release=最终在 {0} 中已过时
+-doclet.Annotation_Types=批注类型
+-doclet.Annotation_Interfaces=批注接口
+-doclet.Annotation_Type_Members=批注类型元素
+-doclet.Annotation_Interface_Members=批注接口元素
+-doclet.annotation_types=批注类型
+-doclet.annotation_interfaces=批注接口
+-doclet.annotation_type_members=批注类型元素
+-doclet.annotation_interface_members=批注接口元素
++doclet.Annotation_Types=注解类型
++doclet.Annotation_Interfaces=注解接口
++doclet.Annotation_Type_Members=注解类型元素
++doclet.Annotation_Interface_Members=注解接口元素
++doclet.annotation_types=注解类型
++doclet.annotation_interfaces=注解接口
++doclet.annotation_type_members=注解类型元素
++doclet.annotation_interface_members=注解接口元素
+ doclet.Generated_Docs_Untitled=生成的文档 (无标题)
+ doclet.Other_Packages=其他程序包
+ doclet.Description=说明
+@@ -236,7 +236,7 @@ doclet.help.class_interface.declaration=类或接口声明
+ doclet.help.class_interface.description=类或接口说明
+ doclet.help.class_interface.member_order=概要条目按字母顺序排列，而详细说明则按其在源代码中出现的顺序排列。这有助于保持程序员所建立的逻辑分组。
+ doclet.help.class_interface.note=注:
+-doclet.help.class_interface.anno=批注接口有必需的元素和可选的元素，但没有方法。
++doclet.help.class_interface.anno=注解接口有必需的元素和可选的元素，但没有方法。
+ doclet.help.class_interface.enum=只有枚举类有枚举常量。
+ doclet.help.class_interface.record=记录类的组件显示为记录类声明的一部分。
+ doclet.help.class_interface.property=属性是 JavaFX 的一个特性。
+@@ -260,7 +260,7 @@ doclet.help.index.head=索引
+ doclet.help.index.body={0} 包含文档中所有类、接口、构造器、方法和字段的按字母顺序排列的索引，以及概要页（例如 {1}）。
+ doclet.help.all_classes.head=所有类和接口
+ # 0: link to All Classes page
+-doclet.help.all_classes.body={0} 包含文档中所有类和接口（包括批注接口、枚举类和记录类）的按字母顺序排列的索引。
++doclet.help.all_classes.body={0} 包含文档中所有类和接口（包括注解接口、枚举类和记录类）的按字母顺序排列的索引。
+ doclet.help.all_packages.head=所有程序包
+ # 0: link to All Packages page
+ doclet.help.all_packages.body={0} 包含文档中所有程序包的按字母顺序排列的索引。
+@@ -276,12 +276,12 @@ doclet.help.externalSpecifications.body={0} 页面列出了对外部规范的引
+ doclet.help.footnote=此帮助文件适用于由标准 doclet 生成的 API 文档。
+ doclet.help.enum.intro=每个枚举类都有各自的页面，其中包含以下部分：
+ doclet.help.enum.class.intro=每个枚举类都有各自的页面，其中包含以下部分：
+-doclet.help.annotation_type.intro=每个批注类型都有各自的页面, 其中包含以下部分:
+-doclet.help.annotation_interface.intro=每个批注接口都有各自的页面，其中包含以下部分：
+-doclet.help.annotation_type.declaration=批注类型声明
+-doclet.help.annotation_interface.declaration=批注接口声明
+-doclet.help.annotation_type.description=批注类型说明
+-doclet.help.annotation_interface.description=批注接口说明
++doclet.help.annotation_type.intro=每个注解类型都有各自的页面, 其中包含以下部分:
++doclet.help.annotation_interface.intro=每个注解接口都有各自的页面，其中包含以下部分：
++doclet.help.annotation_type.declaration=注解类型声明
++doclet.help.annotation_interface.declaration=注解接口声明
++doclet.help.annotation_type.description=注解类型说明
++doclet.help.annotation_interface.description=注解接口说明
+ doclet.help.search.head=搜索
+ # Introduction to Javadoc search features, followed by a list of examples
+ doclet.help.search.intro=可以搜索模块、程序包、类型、字段、方法、系统属性以及 API 中定义的其他术语的定义。可以使用部分或完整名称搜索这些项，（可选）也可以使用“驼峰大小写式”缩写，或使用空格分隔的多个搜索词进行搜索。一些示例：
+@@ -308,17 +308,17 @@ doclet.help.releases.body.refer=某些概要页（新建 API、已过时）允
+ doclet.ClassUse_Packages.that.use.0=使用{0}的程序包
+ doclet.ClassUse_Uses.of.0.in.1={1}中{0}的使用
+ doclet.ClassUse_Classes.in.0.used.by.1={1}使用的{0}中的类
+-doclet.ClassUse_PackageAnnotation=批注类型为{0}的程序包
+-doclet.ClassUse_Annotation=批注类型为{0}的{1}中的类
++doclet.ClassUse_PackageAnnotation=注解类型为{0}的程序包
++doclet.ClassUse_Annotation=注解类型为{0}的{1}中的类
+ doclet.ClassUse_TypeParameter=类型参数类型为{0}的{1}中的类
+ doclet.ClassUse_SubclassTypeParameter={1} 中类型参数类型为 {0} 的子类
+ doclet.ClassUse_SubinterfaceTypeParameter={1} 中类型参数类型为 {0} 的子接口
+ doclet.ClassUse_ImplementsTypeParameter={1} 中实现类型参数类型为 {0} 的接口的类
+ doclet.ClassUse_MethodTypeParameter=类型参数类型为{0}的{1}中的方法
+ doclet.ClassUse_FieldTypeParameter=类型参数类型为{0}的{1}中的字段
+-doclet.ClassUse_FieldAnnotations=批注类型为{0}的{1}中的字段
+-doclet.ClassUse_MethodAnnotations=批注类型为{0}的{1}中的方法
+-doclet.ClassUse_MethodParameterAnnotations=批注类型为{0}的{1}中的方法参数
++doclet.ClassUse_FieldAnnotations=注解类型为{0}的{1}中的字段
++doclet.ClassUse_MethodAnnotations=注解类型为{0}的{1}中的方法
++doclet.ClassUse_MethodParameterAnnotations=注解类型为{0}的{1}中的方法参数
+ doclet.ClassUse_MethodReturnTypeParameter=返回变量类型为{0}的类型的{1}中的方法
+ doclet.ClassUse_Subclass={1}中{0}的子类
+ doclet.ClassUse_Subinterface={1}中{0}的子接口
+@@ -328,8 +328,8 @@ doclet.ClassUse_MethodReturn=返回{0}的{1}中的方法
+ doclet.ClassUse_MethodArgs=参数类型为{0}的{1}中的方法
+ doclet.ClassUse_MethodArgsTypeParameters=类型变量类型为{0}的{1}中的方法参数
+ doclet.ClassUse_MethodThrows=抛出{0}的{1}中的方法
+-doclet.ClassUse_ConstructorAnnotations=批注类型为{0}的{1}中的构造器
+-doclet.ClassUse_ConstructorParameterAnnotations=批注类型为{0}的{1}中的构造器参数
++doclet.ClassUse_ConstructorAnnotations=注解类型为{0}的{1}中的构造器
++doclet.ClassUse_ConstructorParameterAnnotations=注解类型为{0}的{1}中的构造器参数
+ doclet.ClassUse_ConstructorArgs=参数类型为{0}的{1}中的构造器
+ doclet.ClassUse_ConstructorArgsTypeParameters=类型变量类型为{0}的{1}中的构造器参数
+ doclet.ClassUse_ConstructorThrows=抛出{0}的{1}中的构造器
+@@ -549,3 +549,6 @@ doclet.footer_specified=-footer 选项不再受支持并将被忽略。\n可能
+ doclet.docfilessubdirs_specified=注：-docfilessubdirs 选项不再是必需的，可能\n会在未来发行版中删除此选项。
+ 
+ doclet.selectModule=选择要在其中搜索的模块。
++
++# ChineseJava：上游 zh_CN 缺失的键（表：tools\诊断补缺表.tsv）
++doclet.theme.underline_links=给文本中的链接加下划线
+diff --git a/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/toolkit/resources/doclets_zh_CN.properties b/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/toolkit/resources/doclets_zh_CN.properties
+index cde88e840..07e167b70 100644
+--- a/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/toolkit/resources/doclets_zh_CN.properties
++++ b/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/toolkit/resources/doclets_zh_CN.properties
+@@ -140,8 +140,8 @@ doclet.Enums=枚举
+ doclet.EnumClasses=枚举类
+ doclet.RecordClasses=记录类
+ doclet.Related_Packages=相关程序包
+-doclet.AnnotationTypes=批注类型
+-doclet.AnnotationInterfaces=批注接口
++doclet.AnnotationTypes=注解类型
++doclet.AnnotationInterfaces=注解接口
+ doclet.ExceptionClasses=异常错误类
+ doclet.Classes=类
+ doclet.All_Classes_And_Interfaces=所有类和接口
+@@ -149,12 +149,12 @@ doclet.All_Superinterfaces=所有超级接口:
+ doclet.All_Implemented_Interfaces=所有已实现的接口:
+ doclet.Interface=接口
+ doclet.Class=类
+-doclet.AnnotationType=批注类型
+-doclet.AnnotationInterface=批注接口
+-doclet.annotationtype=批注类型
+-doclet.annotationinterface=批注接口
+-doclet.annotationtypes=批注类型
+-doclet.annotationinterfaces=批注接口
++doclet.AnnotationType=注解类型
++doclet.AnnotationInterface=注解接口
++doclet.annotationtype=注解类型
++doclet.annotationinterface=注解接口
++doclet.annotationtypes=注解类型
++doclet.annotationinterfaces=注解接口
+ doclet.Enum=枚举
+ doclet.EnumClass=枚举类
+ doclet.enum=枚举
+@@ -234,8 +234,8 @@ doclet.Constructor=构造器
+ doclet.Method=方法
+ doclet.Annotation_Type_Optional_Member=可选元素
+ doclet.Annotation_Type_Required_Member=必需的元素
+-doclet.Annotation_Type_Member=批注类型元素
+-doclet.Annotation_Interface_Member=批注接口元素
++doclet.Annotation_Type_Member=注解类型元素
++doclet.Annotation_Interface_Member=注解接口元素
+ doclet.Enum_Constant=枚举常量
+ doclet.Description=说明
+ doclet.ConstantField=常量字段
+diff --git a/src/jdk.jshell/share/classes/jdk/internal/jshell/tool/resources/l10n_zh_CN.properties b/src/jdk.jshell/share/classes/jdk/internal/jshell/tool/resources/l10n_zh_CN.properties
+index c175db36d..96a2d1951 100644
+--- a/src/jdk.jshell/share/classes/jdk/internal/jshell/tool/resources/l10n_zh_CN.properties
++++ b/src/jdk.jshell/share/classes/jdk/internal/jshell/tool/resources/l10n_zh_CN.properties
+@@ -292,8 +292,7 @@ help.set._retain = '-retain' 选项保存设置以便在将来会话中使用。
+ 
+ help.set.format.summary = 设置用于报告片段事件的格式
+ 
+-help.set.format = 设置用于报告片段事件的格式：\n\n\t/set format <模式> <字段> "<格式>" <选择器>...\n\n显示格式设置:\n\n\t/set format [<模式> [<字段>]]\n\n其中 <模式> 是以前定义的反馈模式的名称 -- 请参阅 '/help /set mode'。\n其中 <字段> 是要定义的上下文特定格式的名称。\n其中 <格式> 是一个带引号的字符串, 该字符串将为\n字段的值 (如果选择器匹配, 或者没有任何选择器)。\n在使用格式时, 用大括号括起的字段名将会在相应时间\n使用字段值替换。这些字段可能已使用此命令定义, \n也可能是特定于上下文的以下预定义字段之一:\n\t{name}       == 名称, 例如: 变量的名称, ...\n\t{type}       == 类型名称。变量或表达式的类型,\n\t\t\t方法的参数类型\n\t{value}      == 表达式或变量初始化的结果值\n\t{unresolved} == 未解析引用的列表\n\t{errors}     == 可恢复错误的列表 (只在处理\n\t\t\t"display" 字段期间)\n\t{err}        == 无格式的错误行 (只在处理\n\t\t\t"errorline" 字段期间)\n该工具访问以下字段来确定所显示的反馈:\n\t{display}    == 为片段事件显示的消息\n\t{errorline}  == "errors" 字段中的一个错误行的格式\n\t{pre}        == 反馈前缀 (作为命令反馈的开头)\n\t{post}       == 反馈后缀 (作为命令反馈的结尾)\n\t{errorpre}   == 错误前缀 (作为错误反馈的开头)\n\t{errorpost}  == 错误后缀 (作为错误反馈的结尾)\n这些字段具有默认设置 (可覆盖)。\n其中 <selector> 是应用格式的上下文。\n选择器结构是一个由选择器类型列表构成的列表, 使用连字符分隔。\n选择器类型列表是单个选择器类型的值的列表, 使用逗号分隔。\n如果每个选择器类型列表匹配, 则选择器匹配; 如果其中某个值\n匹配, 则选择器类型列表匹配。\n\ncase 选择器类型描述了片段的类型。值包括:\n\timport     -- 导入声明\n\tclass      -- 类声明\n\tinterface  -- 接口声明\n\tenum       -- 枚举声明\n\tannotation -- 批注接口声明\n\trecord     -- 记录声明\n\tmethod     -- 方法声明 -- 注: {type}==parameter-types\n\tvardecl    -- 不带初始化的变量声明\n\tvardecl    -- 带初始化的变量声明\n\texpression -- 表达式 -- \
+-注: {name}==scratch-variable-name\n\tvarvalue   -- 变量值表达式\n\tassignment -- 分配变量\n\tstatement  -- 语句\n操作选择器类型描述了对片段执行的操作。值包括:\n\tadded     -- 片段已添加\n\tmodified  -- 现有片段已修改\n\treplaced  -- 现有片段已替换为新片段\n\toverwrote -- 现有片段已覆盖\n\tdropped   -- 片段已删除\n\tused      -- 片段在不能使用的时候已被使用\nwhen-did-it-occur 选择器类型描述了这是直接操作还是间接操作。值包括:\n\tprimary -- 输入的片段\n\tupdate  -- 对相关片段的更新\nresolution-state 选择器类型描述了片段的解析/定义状态。值包括:\n\tok         -- 已正确解析\n\tdefined    -- 已定义, 但存在可恢复的未解析引用\n\tnotdefined -- 由于存在可恢复的未解析引用而未定义\nunresolved-count 选择器类型描述了未解析引用的数量。值包括:\n\tunresolved0 -- 不存在未解析的名称\n\tunresolved1 -- 一个名称未解析\n\tunresolved2 -- 两个或更多名称未解析\nerrors-count 选择器类型描述了错误的数量。值包括:\n\terror0 -- 无错误\n\terror1 -- 一个错误\n\terror2 -- 两个或更多错误\n\n示例:\n\t/set format mymode action '已创建' added-primary\n\t/set format mymode action '更新已替换' replaced-update\n\t/set format mymode display '{pre}{action} 类 {name}{post}' class-ok\n\t/set format mymode display '{pre}{action} 变量 {name}, 重置为空值{post}' replaced-vardecl,varinit-ok-update\n\n请注意, 某个字段的后续选择器可能会覆盖部分或全部以前使用的选择器 -- 采用最后一个选择器\n\n不带 <格式> 的格式显示当前格式设置。\n指定 <模式> 时, 将仅显示该模式的格式设置。\n同时指定 <模式> 和 <字段> 时, 将仅显示该模式和字段的\n格式设置。示例:\n\t/set format mymode\n显示模式 mymode 的格式设置\n
++help.set.format=设置用于报告片段事件的格式：\n\n\t/set format <模式> <字段> "<格式>" <选择器>...\n\n显示格式设置:\n\n\t/set format [<模式> [<字段>]]\n\n其中 <模式> 是以前定义的反馈模式的名称 -- 请参阅 '/help /set mode'。\n其中 <字段> 是要定义的上下文特定格式的名称。\n其中 <格式> 是一个带引号的字符串, 该字符串将为\n字段的值 (如果选择器匹配, 或者没有任何选择器)。\n在使用格式时, 用大括号括起的字段名将会在相应时间\n使用字段值替换。这些字段可能已使用此命令定义, \n也可能是特定于上下文的以下预定义字段之一:\n\t{name}       == 名称, 例如: 变量的名称, ...\n\t{type}       == 类型名称。变量或表达式的类型,\n\t\t\t方法的参数类型\n\t{value}      == 表达式或变量初始化的结果值\n\t{unresolved} == 未解析引用的列表\n\t{errors}     == 可恢复错误的列表 (只在处理\n\t\t\t"display" 字段期间)\n\t{err}        == 无格式的错误行 (只在处理\n\t\t\t"errorline" 字段期间)\n该工具访问以下字段来确定所显示的反馈:\n\t{display}    == 为片段事件显示的消息\n\t{errorline}  == "errors" 字段中的一个错误行的格式\n\t{pre}        == 反馈前缀 (作为命令反馈的开头)\n\t{post}       == 反馈后缀 (作为命令反馈的结尾)\n\t{errorpre}   == 错误前缀 (作为错误反馈的开头)\n\t{errorpost}  == 错误后缀 (作为错误反馈的结尾)\n这些字段具有默认设置 (可覆盖)。\n其中 <selector> 是应用格式的上下文。\n选择器结构是一个由选择器类型列表构成的列表, 使用连字符分隔。\n选择器类型列表是单个选择器类型的值的列表, 使用逗号分隔。\n如果每个选择器类型列表匹配, 则选择器匹配; 如果其中某个值\n匹配, 则选择器类型列表匹配。\n\ncase 选择器类型描述了片段的类型。值包括:\n\timport     -- 导入声明\n\tclass      -- 类声明\n\tinterface  -- 接口声明\n\tenum       -- 枚举声明\n\tannotation -- 注解接口声明\n\trecord     -- 记录声明\n\tmethod     -- 方法声明 -- 注: {type}==parameter-types\n\tvardecl    -- 不带初始化的变量声明\n\tvardecl    -- 带初始化的变量声明\n\texpression -- 表达式 -- 注: {name}==scratch-variable-name\n\tvarvalue   -- 变量值表达式\n\tassignment -- 分配变量\n\tstatement  -- 语句\n操作选择器类型描述了对片段执行的操作。值包括:\n\tadded     -- 片段已添加\n\tmodified  -- 现有片段已修改\n\treplaced  -- 现有片段已替换为新片段\n\toverwrote -- 现有片段已覆盖\n\tdropped   -- 片段已删除\n\tused      -- 片段在不能使用的时候已被使用\nwhen-did-it-occur 选择器类型描述了这是直接操作还是间接操作。值包括:\n\tprimary -- 输入的片段\n\tupdate  -- 对相关片段的更新\nresolution-state 选择器类型描述了片段的解析/定义状态。值包括:\n\tok         -- 已正确解析\n\tdefined    -- 已定义, 但存在可恢复的未解析引用\n\tnotdefined -- 由于存在可恢复的未解析引用而未定义\nunresolved-count 选择器类型描述了未解析引用的数量。值包括:\n\tunresolved0 -- 不存在未解析的名称\n\tunresolved1 -- 一个名称未解析\n\tunresolved2 -- 两个或更多名称未解析\nerrors-count 选择器类型描述了错误的数量。值包括:\n\terror0 -- 无错误\n\terror1 -- 一个错误\n\terror2 -- 两个或更多错误\n\n示例:\n\t/set format mymode action '已创建' added-primary\n\t/set format mymode action '更新已替换' replaced-update\n\t/set format mymode display '{pre}{action} 类 {name}{post}' class-ok\n\t/set format mymode display '{pre}{action} 变量 {name}, 重置为空值{post}' replaced-vardecl,varinit-ok-update\n\n请注意, 某个字段的后续选择器可能会覆盖部分或全部以前使用的选择器 -- 采用最后一个选择器\n\n不带 <格式> 的格式显示当前格式设置。\n指定 <模式> 时, 将仅显示该模式的格式设置。\n同时指定 <模式> 和 <字段> 时, 将仅显示该模式和字段的\n格式设置。示例:\n\t/set format mymode\n显示模式 mymode 的格式设置\n
+ 
+ help.set.truncation.summary = 设置显示值的最大长度
+ 
+@@ -322,5 +321,4 @@ help.set.start =设置启动配置 -- 启动时读取的片段和命令序列：
+ help.set.indent.summary =指定应用于缩进片段的空格数
+ 
+ help.set.indent =指定应用于缩进片段的空格数：\n\n\t/set indent <number>\n\n显示缩进设置：\n\n\t/set indent\n
+-startup.feedback = /set mode verbose -command    \n\n/set prompt verbose '\\njshell> '   '   ...> '    \n\n/set format verbose pre '|  '    \n/set format verbose post '%n'    \n/set format verbose errorpre '|  '    \n/set format verbose errorpost '%n'    \n\n/set format verbose errorline '{post}{pre}    {err}'    \n\n/set format verbose action '已创建' added-primary    \n/set format verbose action '已修改' modified-primary    \n/set format verbose action '已替换' replaced-primary    \n/set format verbose action '已覆盖' overwrote-primary    \n/set format verbose action '已删除' dropped-primary    \n/set format verbose action '  更新已创建' added-update    \n/set format verbose action '  更新已修改' modified-update    \n/set format verbose action '  更新已替换' replaced-update    \n/set format verbose action '  更新已覆盖' overwrote-update    \n/set format verbose action '  更新已删除' dropped-update    \n\n/set format verbose until '，不过，它无法实例化或者其方法无法调用，直至'   defined-class,record-primary    \n/set format verbose until ', 不过, 其方法无法调用, 直至'                      defined-interface-primary    \n/set format verbose until ', 不过, 它无法使用, 直至'                                  defined-enum,annotation-primary    \n/set format verbose until ', 不过, 它无法调用, 直至'                               defined-method-primary    \n/set format verbose until ', 不过, 它无法引用, 直至'                            notdefined-primary    \n/set format verbose until '它无法实例化或者其方法无法调用，直至'          defined-class,record-update    \n/set format verbose until ' 其方法无法调用, 直至'                              defined-interface-update    \n/set format verbose until ' 它无法调用, 直至'                                      defined-method-update    \n/set format verbose until ' 它无法引用, 直至'                                   notdefined-update    \n\n/set format verbose unrerr '{unresolved} 已声明'                                           unresolved1-error0    \n/set format verbose unrerr '{unresolved} 已声明'                                          unresolved2-error0    \n/set format verbose unrerr ' 此错误已更正: {errors}'                                 unresolved0-error1    \n/set format verbose unrerr '{unresolved} 已声明, 并且此错误已更正: {errors}'     unresolved1-error1    \n/set format verbose unrerr '{unresolved} 已声明, 并且此错误已更正: {errors}'    unresolved2-error1    \n/set format verbose unrerr ' 这些错误已更正: {errors}'                              unresolved0-error2    \n/set format verbose unrerr '{unresolved} 已声明并且这些错误已更正: {errors}'  unresolved1-error2    \n/set format verbose unrerr '{unresolved} 已声明并且这些错误已更正: {errors}' unresolved2-error2    \n\n/set format verbose resolve '{until}{unrerr}'                                                   defined,notdefined-added,modified,replaced,used    \n\n/set format verbose typeKind '类'                  class    \n/set format verbose typeKind '接口'              interface    \n/set format verbose typeKind '枚举'                   enum    \n/set format verbose typeKind \
+-'批注接口'   annotation    \n/set format verbose typeKind '记录'                 record    \n\n/set format verbose result '{name} ==> {value}{post}'                                        added,modified,replaced-ok-primary    \n\n/set format verbose display '{result}{pre}已创建暂存变量 {name} : {type}{post}'    expression-added,modified,replaced-primary    \n/set format verbose display '{result}{pre}{name} 的值: {type}{post}'                    varvalue-added,modified,replaced-primary    \n/set format verbose display '{result}{pre}已分配给 {name} : {type}{post}'                 assignment-primary    \n/set format verbose display '{result}{pre}{action} 变量 {name} : {type}{resolve}{post}'  varinit,vardecl    \n/set format verbose display '{pre}{action} 变量 {name}{resolve}{post}'                   vardecl,varinit-notdefined    \n/set format verbose display '{pre}{action} 变量 {name}{post}'                            dropped-vardecl,varinit,expression    \n/set format verbose display '{pre}{action} 变量 {name}, 重置为空值{post}'             replaced-vardecl,varinit-ok-update    \n\n/set format verbose display '{pre}{action} {typeKind} {name}{resolve}{post}'                 class,interface,enum,annotation,record    \n/set format verbose display '{pre}{action} 方法 {name}({type}){resolve}{post}'             method    \n\n/set format verbose display '{pre}已尝试使用 {typeKind} {name}{resolve}{post}'         used-class,interface,enum,annotation,record    \n/set format verbose display '{pre}已尝试调用方法 {name}({type}){resolve}{post}'    used-method    \n\n/set truncation verbose 80\n/set truncation verbose 1000                                                                  varvalue,expression\n\n/set mode normal -command verbose    \n/set format normal display ''                                                               added,modified,replaced,overwrote,dropped-update    \n/set format normal display '{pre}{action} 变量 {name}, 重置为空值{post}'             replaced-vardecl,varinit-ok-update    \n/set format normal display '{pre}{action} 变量 {name}{resolve}{post}'                   replaced-vardecl,varinit-notdefined    \n/set format normal display '{result}'                                                       added,modified,replaced-expression,varvalue,assignment,varinit,vardecl-ok-primary    \n/set mode concise -quiet normal    \n\n/set prompt concise 'jshell> '   '   ...> '    \n\n/set format concise display ''                                                              class,interface,enum,annotation,record,method,assignment,varinit,vardecl-ok    \n\n/set feedback normal    \n\n/set mode silent -quiet    \n/set prompt silent '-> ' '>> '    \n/set truncation silent 80\n/set truncation silent 1000                                                                  varvalue,expression\n/set format silent pre '|  '    \n/set format silent post '%n'    \n/set format silent errorpre '|  '    \n/set format silent errorpost '%n'    \n/set format silent display ''    \n
++startup.feedback=/set mode verbose -command    \n\n/set prompt verbose '\\njshell> '   '   ...> '    \n\n/set format verbose pre '|  '    \n/set format verbose post '%n'    \n/set format verbose errorpre '|  '    \n/set format verbose errorpost '%n'    \n\n/set format verbose errorline '{post}{pre}    {err}'    \n\n/set format verbose action '已创建' added-primary    \n/set format verbose action '已修改' modified-primary    \n/set format verbose action '已替换' replaced-primary    \n/set format verbose action '已覆盖' overwrote-primary    \n/set format verbose action '已删除' dropped-primary    \n/set format verbose action '  更新已创建' added-update    \n/set format verbose action '  更新已修改' modified-update    \n/set format verbose action '  更新已替换' replaced-update    \n/set format verbose action '  更新已覆盖' overwrote-update    \n/set format verbose action '  更新已删除' dropped-update    \n\n/set format verbose until '，不过，它无法实例化或者其方法无法调用，直至'   defined-class,record-primary    \n/set format verbose until ', 不过, 其方法无法调用, 直至'                      defined-interface-primary    \n/set format verbose until ', 不过, 它无法使用, 直至'                                  defined-enum,annotation-primary    \n/set format verbose until ', 不过, 它无法调用, 直至'                               defined-method-primary    \n/set format verbose until ', 不过, 它无法引用, 直至'                            notdefined-primary    \n/set format verbose until '它无法实例化或者其方法无法调用，直至'          defined-class,record-update    \n/set format verbose until ' 其方法无法调用, 直至'                              defined-interface-update    \n/set format verbose until ' 它无法调用, 直至'                                      defined-method-update    \n/set format verbose until ' 它无法引用, 直至'                                   notdefined-update    \n\n/set format verbose unrerr '{unresolved} 已声明'                                           unresolved1-error0    \n/set format verbose unrerr '{unresolved} 已声明'                                          unresolved2-error0    \n/set format verbose unrerr ' 此错误已更正: {errors}'                                 unresolved0-error1    \n/set format verbose unrerr '{unresolved} 已声明, 并且此错误已更正: {errors}'     unresolved1-error1    \n/set format verbose unrerr '{unresolved} 已声明, 并且此错误已更正: {errors}'    unresolved2-error1    \n/set format verbose unrerr ' 这些错误已更正: {errors}'                              unresolved0-error2    \n/set format verbose unrerr '{unresolved} 已声明并且这些错误已更正: {errors}'  unresolved1-error2    \n/set format verbose unrerr '{unresolved} 已声明并且这些错误已更正: {errors}' unresolved2-error2    \n\n/set format verbose resolve '{until}{unrerr}'                                                   defined,notdefined-added,modified,replaced,used    \n\n/set format verbose typeKind '类'                  class    \n/set format verbose typeKind '接口'              interface    \n/set format verbose typeKind '枚举'                   enum    \n/set format verbose typeKind '注解接口'   annotation    \n/set format verbose typeKind '记录'                 record    \n\n/set format verbose result '{name} ==> {value}{post}'                                        added,modified,replaced-ok-primary    \n\n/set format verbose display '{result}{pre}已创建暂存变量 {name} : {type}{post}'    expression-added,modified,replaced-primary    \n/set format verbose display '{result}{pre}{name} 的值: {type}{post}'                    varvalue-added,modified,replaced-primary    \n/set format verbose display '{result}{pre}已分配给 {name} : {type}{post}'                 assignment-primary    \n/set format verbose display '{result}{pre}{action} 变量 {name} : {type}{resolve}{post}'  varinit,vardecl    \n/set format verbose display '{pre}{action} 变量 {name}{resolve}{post}'                   vardecl,varinit-notdefined    \n/set format verbose display '{pre}{action} 变量 {name}{post}'                            dropped-vardecl,varinit,expression    \n/set format verbose display '{pre}{action} 变量 {name}, 重置为空值{post}'             replaced-vardecl,varinit-ok-update    \n\n/set format verbose display '{pre}{action} {typeKind} {name}{resolve}{post}'                 class,interface,enum,annotation,record    \n/set format verbose display '{pre}{action} 方法 {name}({type}){resolve}{post}'             method    \n\n/set format verbose display '{pre}已尝试使用 {typeKind} {name}{resolve}{post}'         used-class,interface,enum,annotation,record    \n/set format verbose display '{pre}已尝试调用方法 {name}({type}){resolve}{post}'    used-method    \n\n/set truncation verbose 80\n/set truncation verbose 1000                                                                  varvalue,expression\n\n/set mode normal -command verbose    \n/set format normal display ''                                                               added,modified,replaced,overwrote,dropped-update    \n/set format normal display '{pre}{action} 变量 {name}, 重置为空值{post}'             replaced-vardecl,varinit-ok-update    \n/set format normal display '{pre}{action} 变量 {name}{resolve}{post}'                   replaced-vardecl,varinit-notdefined    \n/set format normal display '{result}'                                                       added,modified,replaced-expression,varvalue,assignment,varinit,vardecl-ok-primary    \n/set mode concise -quiet normal    \n\n/set prompt concise 'jshell> '   '   ...> '    \n\n/set format concise display ''                                                              class,interface,enum,annotation,record,method,assignment,varinit,vardecl-ok    \n\n/set feedback normal    \n\n/set mode silent -quiet    \n/set prompt silent '-> ' '>> '    \n/set truncation silent 80\n/set truncation silent 1000                                                                  varvalue,expression\n/set format silent pre '|  '    \n/set format silent post '%n'    \n/set format silent errorpre '|  '    \n/set format silent errorpost '%n'    \n/set format silent display ''    \n
+diff --git a/test/langtools/tools/javac/diags/CheckResourceKeys.java b/test/langtools/tools/javac/diags/CheckResourceKeys.java
+index b29fffd41..8dd510e01 100644
+--- a/test/langtools/tools/javac/diags/CheckResourceKeys.java
++++ b/test/langtools/tools/javac/diags/CheckResourceKeys.java
+@@ -293,6 +293,14 @@ void findMissingKeys(Set<String> codeStrings, Set<String> resourceKeys) {
+             "line.separator",
+             "os.name",
+             "user.dir",
++            // ChineseJava：诊断前缀开关的系统属性（见 NOTICE.txt 的改动清单）
++            "chinesejava.diagnostics.prefix",
++            // ChineseJava：前缀开关键住在自建包 com.sun.tools.javac.resources.chinesejava，
++            // 而本测试的 getResourceKeys() 只枚举 {javac, compiler, launcher} 三个包（硬编码），
++            // 因此这三个键按本测试提供的例外机制登记。
++            "chinesejava.err.error",
++            "chinesejava.warn.warning",
++            "chinesejava.note.note",
+             // file names
+             "ct.sym",
+             "rt.jar",
+diff --git a/test/langtools/tools/javac/diags/examples.not-yet.txt b/test/langtools/tools/javac/diags/examples.not-yet.txt
+index 08fe5b754..2d414ba3d 100644
+--- a/test/langtools/tools/javac/diags/examples.not-yet.txt
++++ b/test/langtools/tools/javac/diags/examples.not-yet.txt
+@@ -224,3 +224,7 @@ compiler.misc.feature.value.classes
+ # Pending removal
+ compiler.note.implicit.annotation.processing
+ compiler.warn.proc.use.proc.or.implicit
++
++
++# ChineseJava：中文关键字被误用时的可行动提示（由 JavacParser 在语法错误处补发）
++compiler.err.chinesejava.keyword                    # ChineseJava: 误用提示，非一般诊断

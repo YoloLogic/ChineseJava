@@ -1,0 +1,75 @@
+# ChineseJava 关键字用例表 —— 穷举验证每个中文拼写"真的能用"
+# 列：英文|中文|强度|预期|模板（@ = 关键字插入位置；\n = 换行；中英共用同一模板 ⇒ 结构/行号一致 ⇒ 字节码可比）
+# 预期 ∈ 跑（编译+运行+输出 ok+字节码对拍）| 编（编译+字节码对拍）| 模块（模块编译+module-info.class 对拍）| 误用（只验"当标识符必须报专属消息"）| 预览（--enable-preview 编译运行）
+英文|中文|强度|预期|模板
+abstract|抽象|硬|跑|public @ class 用例 { @ void m(); public static void main(String[] a) { System.out.println("ok"); } }
+assert|断言|硬|跑|public class 用例 { public static void main(String[] a) { @ 1 == 1; System.out.println("ok"); } }
+boolean|布尔|硬|跑|public class 用例 { public static void main(String[] a) { @ b = true; if (b) System.out.println("ok"); } }
+break|跳出|硬|跑|public class 用例 { public static void main(String[] a) { for (int i = 0; i < 3; i++) { if (i == 1) @; } System.out.println("ok"); } }
+byte|字节|硬|跑|public class 用例 { public static void main(String[] a) { @ v = 1; if (v == 1) System.out.println("ok"); } }
+case|情形|硬|跑|public class 用例 { public static void main(String[] a) { switch (1) { @ 1: System.out.println("ok"); break; default: break; } } }
+catch|捕获|硬|跑|public class 用例 { public static void main(String[] a) { try { throw new RuntimeException(); } @ (RuntimeException e) { System.out.println("ok"); } } }
+char|字符|硬|跑|public class 用例 { public static void main(String[] a) { @ c = 'x'; if (c == 'x') System.out.println("ok"); } }
+class|类型|硬|跑|public @ 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+const|常量|硬|误用|
+continue|跳过|硬|跑|public class 用例 { public static void main(String[] a) { for (int i = 0; i < 3; i++) { if (i == 1) @; } System.out.println("ok"); } }
+default|默认|硬|跑|public class 用例 { public static void main(String[] a) { switch (2) { case 1: break; @: System.out.println("ok"); } } }
+do|执行|硬|跑|public class 用例 { public static void main(String[] a) { int i = 0; @ { i++; } while (i < 2); if (i == 2) System.out.println("ok"); } }
+double|双精度|硬|跑|public class 用例 { public static void main(String[] a) { @ d = 1.5; if (d > 1) System.out.println("ok"); } }
+else|否则|硬|跑|public class 用例 { public static void main(String[] a) { if (false) { } @ { System.out.println("ok"); } } }
+enum|枚举|硬|跑|public class 用例 { @ E { A } public static void main(String[] a) { if (E.A != null) System.out.println("ok"); } }
+extends|继承|硬|跑|class Base { } public class 用例 @ Base { public static void main(String[] a) { System.out.println("ok"); } }
+final|最终|硬|跑|public class 用例 { public static void main(String[] a) { @ int x = 1; if (x == 1) System.out.println("ok"); } }
+finally|最终必须|硬|跑|public class 用例 { public static void main(String[] a) { try { } @ { System.out.println("ok"); } } }
+float|单精度|硬|跑|public class 用例 { public static void main(String[] a) { @ f = 1.5f; if (f > 1) System.out.println("ok"); } }
+for|对于|硬|跑|public class 用例 { public static void main(String[] a) { @ (int i = 0; i < 2; i++) { } System.out.println("ok"); } }
+goto|跳转|硬|误用|
+if|如果|硬|跑|public class 用例 { public static void main(String[] a) { @ (true) { System.out.println("ok"); } } }
+implements|实现|硬|跑|interface I { } public class 用例 @ I { public static void main(String[] a) { System.out.println("ok"); } }
+import|导入|硬|跑|@ java.util.List; public class 用例 { public static void main(String[] a) { List<String> l = new java.util.ArrayList<>(); l.add("x"); if (l.size() == 1) System.out.println("ok"); } }
+instanceof|属于|硬|跑|public class 用例 { public static void main(String[] a) { Object o = "x"; if (o @ String) System.out.println("ok"); } }
+int|整数|硬|跑|public class 用例 { public static void main(String[] a) { @ v = 3; if (v == 3) System.out.println("ok"); } }
+interface|接口|硬|跑|@ I { } public class 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+long|长型|硬|跑|public class 用例 { public static void main(String[] a) { @ v = 3L; if (v == 3) System.out.println("ok"); } }
+native|本机|硬|跑|public class 用例 { @ void m(); public static void main(String[] a) { System.out.println("ok"); } }
+new|新建|硬|跑|public class 用例 { public static void main(String[] a) { Object o = @ Object(); if (o != null) System.out.println("ok"); } }
+package|包声明|硬|编|@ demo; public class 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+private|私有|硬|跑|public class 用例 { @ static int X = 1; public static void main(String[] a) { if (X == 1) System.out.println("ok"); } }
+protected|受保护|硬|跑|public class 用例 { @ static int X = 1; public static void main(String[] a) { if (X == 1) System.out.println("ok"); } }
+public|公开|硬|跑|@ class 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+return|返回|硬|跑|public class 用例 { static int f() { @ 1; } public static void main(String[] a) { if (f() == 1) System.out.println("ok"); } }
+short|短型|硬|跑|public class 用例 { public static void main(String[] a) { @ v = 3; if (v == 3) System.out.println("ok"); } }
+static|静态|硬|跑|public class 用例 { @ int X = 1; public static void main(String[] a) { if (X == 1) System.out.println("ok"); } }
+strictfp|严格浮点|硬|跑|public @ class 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+super|父类|硬|跑|class B { int f() { return 1; } } public class 用例 extends B { int f() { return @.f() + 1; } public static void main(String[] a) { if (new 用例().f() == 2) System.out.println("ok"); } }
+switch|选择|硬|跑|public class 用例 { public static void main(String[] a) { @ (1) { case 1: System.out.println("ok"); break; default: break; } } }
+synchronized|同步|硬|跑|public class 用例 { static final Object L = new Object(); public static void main(String[] a) { @ (L) { System.out.println("ok"); } } }
+this|自身|硬|跑|public class 用例 { int x = 1; int f() { return @.x; } public static void main(String[] a) { if (new 用例().f() == 1) System.out.println("ok"); } }
+throw|抛出|硬|跑|public class 用例 { public static void main(String[] a) { try { @ new RuntimeException(); } catch (RuntimeException e) { System.out.println("ok"); } } }
+throws|声明抛出|硬|跑|public class 用例 { static void m() @ RuntimeException { } public static void main(String[] a) { m(); System.out.println("ok"); } }
+transient|瞬态|硬|跑|public class 用例 { @ static int x = 1; public static void main(String[] a) { if (x == 1) System.out.println("ok"); } }
+try|尝试|硬|跑|public class 用例 { public static void main(String[] a) { @ { System.out.println("ok"); } finally { } } }
+void|空型|硬|跑|public class 用例 { static @ f() { } public static void main(String[] a) { f(); System.out.println("ok"); } }
+volatile|易变|硬|跑|public class 用例 { @ static int x = 1; public static void main(String[] a) { if (x == 1) System.out.println("ok"); } }
+while|每当|硬|跑|public class 用例 { public static void main(String[] a) { int i = 0; @ (i < 2) { i++; } if (i == 2) System.out.println("ok"); } }
+true|真值|硬|跑|public class 用例 { public static void main(String[] a) { boolean b = @; if (b) System.out.println("ok"); } }
+false|假值|硬|跑|public class 用例 { public static void main(String[] a) { boolean b = @; if (!b) System.out.println("ok"); } }
+null|空值|硬|跑|public class 用例 { public static void main(String[] a) { Object o = @; if (o == null) System.out.println("ok"); } }
+var|自动|软|跑|public class 用例 { public static void main(String[] a) { @ s = "x"; if (s.length() == 1) System.out.println("ok"); } }
+yield|产出|软|跑|public class 用例 { public static void main(String[] a) { int r = switch (1) { case 1 -> { @ 5; } default -> 0; }; if (r == 5) System.out.println("ok"); } }
+record|记录|软|跑|record R(int x) { } public class 用例 { public static void main(String[] a) { if (new R(3).x() == 3) System.out.println("ok"); } }
+sealed|密封|软|跑|@ class S permits C { } final class C extends S { } public class 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+permits|许可|软|跑|sealed class S @ C { } final class C extends S { } public class 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+when|符合|软|跑|public class 用例 { public static void main(String[] a) { Object o = 1; int r = switch (o) { case Integer i @ i > 0 -> 1; default -> 0; }; if (r == 1) System.out.println("ok"); } }
+module|模块|软|模块|@ demo.mod { }
+open|开放|软|模块|@ module demo.mod { }
+opens|开放包|软|模块|module demo.mod { @ demo.pkg; }
+requires|依赖|软|模块|module demo.mod { @ java.logging; }
+transitive|传递|软|模块|module demo.mod { requires @ java.logging; }
+exports|导出|软|模块|module demo.mod { @ demo.pkg; }
+to|指向|软|模块|module demo.mod { exports demo.pkg @ java.logging; }
+uses|使用|软|模块|module demo.mod { @ demo.pkg.S; }
+provides|提供|软|模块|module demo.mod { @ demo.pkg.S with demo.pkg.Impl; }
+with|伴随|软|模块|module demo.mod { provides demo.pkg.S @ demo.pkg.Impl; }
+non-sealed|非密封|软|跑|sealed class S permits C { } @ class C extends S { } public class 用例 { public static void main(String[] a) { System.out.println("ok"); } }
+value|值类|软|预览|@ class V { } public class 用例 { public static void main(String[] a) { System.out.println("ok"); } }

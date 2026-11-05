@@ -1,0 +1,77 @@
+# ChineseJava 关键字表 —— 唯一真相（本文件是表，其余都是生成物）
+# 列：英文	中文	类别	强度	出处	备注
+# 类别 ∈ 保留 | 字面量 | 上下文 | 特例 | 预览 | 不译
+# 强度 ∈ 硬（占标识符空间）| 软（位置敏感，不占标识符空间）| 不译
+# 出处 ∈ C++（Chinese++ 逐字一致）| Py（ChinesePython 逐字一致）| 双（两线逐字一致）| 新（两线都没有，本次新定）
+abstract	抽象	保留	硬	新	两线都没有；C++ 无 abstract 关键字
+assert	断言	保留	硬	Py	
+boolean	布尔	保留	硬	C++	C++ 是 bool（英文词不同、概念同）
+break	跳出	保留	硬	双	
+byte	字节	保留	硬	新	C++ 只有库类型 std::byte，无关键字
+case	情形	保留	硬	双	
+catch	捕获	保留	硬	双	
+char	字符	保留	硬	C++	
+class	类型	保留	硬	双	单字「类」违反 2–6 定则
+const	常量	保留	硬	C++	Java 中保留未用
+continue	跳过	保留	硬	双	
+default	默认	保留	硬	C++	
+do	执行	保留	硬	C++	
+double	双精度	保留	硬	C++	
+else	否则	保留	硬	双	
+enum	枚举	保留	硬	C++	
+extends	继承	保留	硬	新	泛型上界位置读作「继承」；备选「扩展」
+final	最终	保留	硬	C++	
+finally	最终必须	保留	硬	Py	与 final 分离（同词根两词，加限定造新词）
+float	单精度	保留	硬	C++	
+for	对于	保留	硬	双	
+goto	跳转	保留	硬	C++	Java 中保留未用
+if	如果	保留	硬	双	
+implements	实现	保留	硬	新	
+import	导入	保留	硬	双	
+instanceof	属于	保留	硬	新	硬关键字；L3 的 Class.isInstance 预留名 = 是实例
+int	整数	保留	硬	C++	
+interface	接口	保留	硬	新	
+long	长型	保留	硬	C++	
+native	本机	保留	硬	新	备选「原生」
+new	新建	保留	硬	C++	
+package	包声明	保留	硬	新	单字「包」违反 2–6 定则
+private	私有	保留	硬	C++	
+protected	受保护	保留	硬	C++	
+public	公开	保留	硬	C++	
+return	返回	保留	硬	双	
+short	短型	保留	硬	C++	
+static	静态	保留	硬	C++	
+strictfp	严格浮点	保留	硬	新	Java 17 起浮点运算本就严格，属历史遗留
+super	父类	保留	硬	新	Python 的 super 是内建函数、非关键字
+switch	选择	保留	硬	C++	
+synchronized	同步	保留	硬	新	
+this	自身	保留	硬	C++	Python 的 self 是约定标识符、非关键字
+throw	抛出	保留	硬	双	
+throws	声明抛出	保留	硬	新	与「抛出」同文件共存（实测 3731 个文件），必须区分
+transient	瞬态	保留	硬	新	备选「临时」
+try	尝试	保留	硬	双	
+void	空型	保留	硬	C++	
+volatile	易变	保留	硬	C++	
+while	每当	保留	硬	双	
+true	真值	字面量	硬	双	JLS 3.10 字面量，非关键字
+false	假值	字面量	硬	双	JLS 3.10 字面量，非关键字
+null	空值	字面量	硬	Py	对齐 ChinesePython 的 None
+var	自动	上下文	软	C++	概念同 C++ 的 auto（自动类型推导）
+yield	产出	上下文	软	Py	
+record	记录	上下文	软	新	软关键字 ⇒ 不占标识符空间
+sealed	密封	上下文	软	新	
+permits	许可	上下文	软	新	
+when	符合	上下文	软	新	概念名 guard 留给「卫士」（上游资源已用此译）
+module	模块	上下文	软	C++	
+open	开放	上下文	软	新	
+opens	开放包	上下文	软	新	与 open 同文件共存，必须区分
+requires	依赖	上下文	软	新	C++ 的 requires=约束（不同概念，故不沿用）
+transitive	传递	上下文	软	新	与「依赖」拼成标准术语「传递依赖」
+exports	导出	上下文	软	新	跨语言复用 C++ 的 export（同概念）
+to	指向	上下文	软	新	单字「至」违反 2–6 定则
+uses	使用	上下文	软	新	跨语言重词：C++ using / Py with 亦为「使用」（记账）
+provides	提供	上下文	软	新	
+with	伴随	上下文	软	新	Py 已把「使用」给 with，故错开
+non-sealed	非密封	特例	软	新	英文是两个 token，中文反而是一个词
+value	值类	预览	软	新	JDK 28 预览期；避免与「类型」连读重复
+_	不译	不译	不译	Py	单字符符号不是词，翻译会破坏 2–6 汉字定则

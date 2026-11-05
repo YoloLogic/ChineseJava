@@ -1,0 +1,9 @@
+# 统一按 LF 存储/检出（跨平台可复现）
+* text=auto eol=lf
+
+# 补丁必须**逐字节**保持原样：任何换行转换都会让 git apply / patch 失败
+*.patch -text
+*.diff  -text
+
+# 这些也保持原样（生成器按字节比对）
+*.tsv -text

@@ -1,0 +1,103 @@
+ChineseJava —— 基于 OpenJDK 的中文 Java（Windows 线）
+=====================================================
+
+本发行版是 OpenJDK 的**修改版派生作品（modified derivative work）**，
+由 ChineseJava 项目在 OpenJDK 28 源码之上加入中文关键字拼写与中文诊断汉化。
+
+它不是 Oracle 或 OpenJDK 官方发行版，也未获其背书；本项目不使用 Oracle 的 "Java" 商标。
+
+
+上游
+----
+  OpenJDK (https://openjdk.org/)
+  源码：https://github.com/openjdk/jdk
+  基线：commit 98540582000172a16087d15b650b80caa505c5b7（master，2026-10-10，JDK 28 开发主线）
+  许可：GNU General Public License, version 2, with the Classpath Exception
+  版权：Copyright (c) Oracle and/or its affiliates, and OpenJDK contributors.
+        各文件头部保留其原始版权与许可声明。
+
+  上游自带的第三方代码（zlib / libpng / libjpeg / lcms / harfbuzz / freetype 子集 等）
+  随上游原样保留，适用其各自许可；明细见 jdk/ADDITIONAL_LICENSE_INFO 及各目录声明。
+
+
+本派生的改动清单（共 16 处；库名层与 HotSpot 窄放行已于 2026-11 回退，见第三节脚注）
+--------------------------------
+一、中文关键字（L2）
+  1. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/ZhKeywords.java      【新增】
+     中文拼写表（硬 53 + 软 18），由 tools/生成关键字表.ps1 从 tools/关键字表.tsv 生成。
+  2. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/Tokens.java          【改】
+     词法层：把中文硬关键字挂到既有 keywords 表上（英文原表未动）。
+  3. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/JavacParser.java     【改】
+     解析层：软关键字按位置识别（36 处 isSoft 判定 + 助手）。
+
+二、中文诊断（L1）
+  4. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler_zh_CN.properties   【改】
+  5. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/javac_zh_CN.properties      【改】
+  6. jdk/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/toolkit/resources/doclets_zh_CN.properties        【改】
+  7. jdk/src/jdk.javadoc/share/classes/jdk/javadoc/internal/doclets/formats/html/resources/standard_zh_CN.properties  【改】
+  8. jdk/src/jdk.jshell/share/classes/jdk/internal/jshell/tool/resources/l10n_zh_CN.properties    【改】
+     术语统一（批注→注解、简名→简单名、single-type-import→单类型导入）、补上游缺失的 15 条译文、
+     诊断前缀默认英文（error:/warning:/note:）+ 中文前缀备用键（错误:/警告:/注:）。
+  9. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/util/AbstractDiagnosticFormatter.java 【改】
+     前缀开关：CHINESEJAVA_PREFIX=zh 或 -Dchinesejava.diagnostics.prefix=zh 时使用中文前缀。
+
+三、诊断前缀开关键（L1 配套）
+  10. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/chinesejava.properties 【新增】
+      诊断前缀开关键（错误:/警告:/注:）。自建基础包：不是诊断正文，且必须任何 locale 都取得到
+      （ResourceBundle 按调用时默认 locale 取包，只放 zh_CN 会让上游两个检查在英文 locale 下失败）。
+  ※ 库名层（原第 44-52 行的 ZhLibNames.java / Resolve.java）与 HotSpot 窄放行（原第 62-70 行的
+    modules.cpp / instanceKlass.cpp / ClassLoader.java）已于 2026-11 **随"取消 java 库汉化"一并回退/删除**，
+    此处不再登记。回退后的 jdk 树与上游 commit 在上述文件上逐字一致。
+
+四、硬关键字误用的专属消息（批 1 收尾）
+  11. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/parser/JavacParser.java   （已在第 3 条列过，此处补记本次新增分支）
+     在 ident() 里照上游 assert/enum 的范式，给"中文硬关键字被当作标识符"加专属消息分支；
+     仅在 token 拼写属于中文硬关键字表时生效 ⇒ 纯英文源码行为不变。
+ 12. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler.properties 【改】
+ 13. jdk/src/jdk.compiler/share/classes/com/sun/tools/javac/resources/compiler_zh_CN.properties 【改】
+     新增键 compiler.err.chinesejava.keyword（英文侧带 `# 0: string` 参数类型注释，CreateSymbols 靠它生成带参方法）。
+
+五、回归测试的登记（不是改行为，只是把我们的新增登记进上游的检查表）
+ 14. jdk/test/langtools/tools/javac/diags/examples.not-yet.txt                                 【改】
+     把 chinesejava.err.error / chinesejava.warn.warning / chinesejava.note.note 三个前缀开关键
+     登记进 not-yet 列表（它们不是诊断正文，产不出示例）。
+ 15. jdk/test/langtools/tools/javac/diags/CheckResourceKeys.java                               【改】
+     把系统属性名 chinesejava.diagnostics.prefix 登记进 noResourceRequired 例外表。
+     ⇒ 这两处是 jtreg 回归（CheckResourceKeys / CheckExamples）要求的官方登记机制，不是绕过检查。
+
+六、构建系统（上游本地化 bug 的本地绕过，非语言特性）
+ 16. jdk/make/autoconf/toolchain.m4                                                    【改】
+     中文 Windows 的 MSVC 横幅被本地化，导致上游 configure 误判 CPU（"CL is for 版"）
+     与版本号（误报"比 19.28 老"）。改为先找已知 CPU 标识 / 先取点分版本号，取不到再退回原逻辑。
+     ⇒ 上游修好后应删除本改动。
+
+
+本仓库（ChineseJava 原创部分，GPLv2 + Classpath Exception）
+----------------------------------------------------------
+  tools/关键字表.tsv           中文关键字表（唯一真相）
+  tools/关键字用例.tsv         71 拼写位用例表（判据驱动）
+  tools/诊断术语表.tsv         诊断术语表（唯一真相）
+  tools/诊断补缺表.tsv         诊断缺键译文表
+  tools/生成关键字表.ps1       生成器：表 → 文档 + ZhKeywords.java
+  tools/生成诊断汉化.ps1       生成器：表 → *_zh_CN.properties + 差异台账
+  tools/接线软关键字.ps1       解析层接线补丁（可重复应用，便于跟随上游）
+  tools/构建.ps1               构建（MSYS2 + boot JDK + VS 2022）
+  tools/跑测试.ps1             jtreg 回归入口
+  tests/跑批1判据.ps1          诊断汉化判据（21 项）
+  tests/跑批2b判据.ps1         软关键字判据（13 项）
+  tests/跑批4判据.ps1          方向/边界/台账判据（12 项）
+  tests/跑批5判据.ps1          71 拼写位穷举判据（72 项）
+  tests/已作废/                作废判据存档（不参与自动发现）
+  verify.ps1                   用户侧自检（含"判据自测"与元判据）
+  install.ps1                  用户侧安装
+  docs/                        台账与记录（判据原始输出、差异台账、构建环境台账、口径变更记录）
+  examples/                    中文示例
+  README.md / 常见问题.md      使用说明
+  LICENSE-SCOPE.md             许可范围说明
+
+
+发行义务提醒
+------------
+  * GPLv2 要求随二进制提供对应源码：请一并分发 jdk/（含上述改动后的完整源码）与本仓库原创文件。
+  * 不得删除上游版权头与 LICENSE / ADDITIONAL_LICENSE_INFO / ASSEMBLY_EXCEPTION。
+  * 不得暗示本发行版是 Oracle 或 OpenJDK 官方版本。

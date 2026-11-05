@@ -1,0 +1,18 @@
+# ChineseJava 诊断术语表 —— L1 的唯一术语真相（生成器据此改写上游 zh_CN）
+# 列：类别	原文	建议	出现次数	处置	理由	状态
+# 处置 ∈ 覆盖上游（真改）| 保留上游（登记为有意保留，不动）| 新增（补缺键）
+术语	批注	注解	87	覆盖上游	大陆通行术语（用户裁定）	已裁定
+术语	简名	简单名	2	覆盖上游	现代术语更清晰	暂定（按推荐执行，可改）
+术语	single-type-import	单类型导入	2	覆盖上游	消除英文短语；上游整段留英	暂定（按推荐执行，可改）
+术语	超类	超类	11	保留上游	中文 Java 社区既定说法；与关键字「父类」属不同语域（关键字 vs 诊断正文）	暂定（按推荐执行，可改）
+术语	超类型	超类型	6	保留上游	同上	暂定（按推荐执行，可改）
+术语	覆盖	覆盖	32	保留上游	javac 现译法、中文 Java 通用；若要跨线对齐 C++ 的 override=重写 则改本行	暂定（按推荐执行，可改）
+术语	static-import	静态导入	0	保留上游	上游未出现，登记备查	暂定
+前缀	compiler.err.error	error:\u0020	1	覆盖上游	默认英文，保住工具链解析（VSCode problemMatcher / Gradle / CI）	已裁定
+前缀	compiler.warn.warning	warning:\u0020	1	覆盖上游	同上	已裁定
+前缀	compiler.note.note	note:\u0020	1	覆盖上游	同上	已裁定
+前缀	chinesejava.err.error	错误:\u0020	0	新增	开关切中文时使用（-Dchinesejava.diagnostics.prefix=zh 或 CHINESEJAVA_PREFIX=zh）	已裁定
+前缀	chinesejava.warn.warning	警告:\u0020	0	新增	同上	已裁定
+前缀	chinesejava.note.note	注:\u0020	0	新增	同上	已裁定
+关键字名	switch/case/yield/catch/default/this/finally/instanceof/throws/static/void/permits/opens/requires/provides	保留英文	约120	保留上游	**上游既定口径**（实测：switch 表达式 / case 子句 / instanceof 中的模式匹配 / 多个 case 标签）	已定
+留英	serialVersionUID/serialPersistentFields/Xlint/enable-preview/module-source-path/try-with-resources/lambda/varargs/HTML/metafactory/java/javac/proc/source/release/loop/value/close/main/finalize/writeReplace	保留英文	各若干	保留上游	API 名/命令行选项/技术名/方法名：翻了反而更难查	已定
