@@ -1,0 +1,59 @@
+{
+  // ChineseJava × VS Code 任务
+  //
+  // 重要：任务类型必须是 "process"，不能是 "shell"。
+  //   "shell" 会把整条命令交给 PowerShell 再解析一遍，而 PowerShell 会把
+  //   -Dstdout.encoding=UTF-8 拆成 "-Dstdout.encoding" + "UTF-8" 之类，
+  //   导致 java 收到 ".encoding=UTF-8" 并报「找不到或无法加载主类 .encoding=UTF-8」。
+  //   "process" 直接按 args 数组传参，完全绕开 shell 解析。
+  //
+  // 换机器只改下面三处 JDK 路径。
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ChineseJava: 编译当前文件",
+      "type": "process",
+      "command": "E:\\ChineseJava\\jdk\\build\\cnjava\\images\\jdk\\bin\\javac.exe",
+      "args": [
+        "-encoding", "UTF-8",
+        "-d", "${workspaceFolder}\\out",
+        "${file}"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": {
+        "owner": "javac",
+        "fileLocation": "absolute",
+        // 匹配中文诊断：  path:line: error: 消息 / 错误: 消息 / 注: 消息
+        "pattern": {
+          "regexp": "^(.*?):(\\d+):\\s*(?:error|错误|warning|警告|注|note):\\s*(.*)$",
+          "file": 1,
+          "line": 2,
+          "message": 3
+        }
+      },
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "ChineseJava: 运行当前文件",
+      "type": "process",
+      "command": "E:\\ChineseJava\\jdk\\build\\cnjava\\images\\jdk\\bin\\java.exe",
+      "args": [
+        "-Dstdout.encoding=UTF-8",
+        "-Dfile.encoding=UTF-8",
+        "-cp", "${workspaceFolder}\\out",
+        "${fileBasenameNoExtension}"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "ChineseJava: 编译并运行",
+      "dependsOrder": "sequence",
+      "dependsOn": ["ChineseJava: 编译当前文件", "ChineseJava: 运行当前文件"],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

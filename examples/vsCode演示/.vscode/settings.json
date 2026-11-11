@@ -1,0 +1,19 @@
+{
+  // 源码一律 UTF-8（生成的 .class 不受影响）
+  "files.encoding": "utf8",
+  "files.autoGuessEncoding": false,
+
+  // 让 VS Code 的终端把中文按 UTF-8 显示
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.env.windows": {
+    "JAVA_HOME": "E:\\ChineseJava\\jdk\\build\\cnjava\\images\\jdk"
+  },
+
+  // ↓ 仅当你**装了** Java 扩展时才生效：把语言服务器的 JDK 指向本镜像。
+  //   注意：该扩展用的是 Eclipse JDT 编译器，**不认识中文关键字**，
+  //   所以它会把 公开/类型/整数 之类标成错误——本演示因此只用任务（tasks.json）编译。
+  "java.jdt.ls.java.home": "E:\\ChineseJava\\jdk\\build\\cnjava\\images\\jdk",
+  "java.configuration.runtimes": [
+    { "name": "JavaSE-28", "path": "E:\\ChineseJava\\jdk\\build\\cnjava\\images\\jdk", "default": true }
+  ]
+}

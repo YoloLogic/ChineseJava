@@ -8,3 +8,6 @@
 /临时/
 /构建日志/
 *.log
+
+# VS Code 演示工作区的编译产物
+examples/vsCode演示/out/
