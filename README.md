@@ -3,6 +3,22 @@
 > **中英两种写法都能用，而且可以混着写。** 中文不是替换英文，是**并列多出来的一种拼写**：
 > 中文拼写命中后仍然回落到**完全未改动**的英文原表 —— 两种写法产生同一个 token、同一份字节码。
 
+
+## ⬇️ 直接用（不用自己构建）
+
+**Windows x64 可用构建**：[Releases · v28-cnjava-20261111](https://github.com/YoloLogic/ChineseJava/releases/latest)
+
+```
+ChineseJava-jdk28-windows-x64-20261111.zip   236 MB
+解压后：jdk\bin\java.exe / javac.exe
+```
+
+```
+.\jdk\bin\javac.exe -encoding UTF-8 甲类.java
+.\jdk\bin\java.exe -cp . 甲类
+```
+
+> 要自己从源码构建，见下面的「仓库结构」与 `docs\构建环境台账.md`。
 ---
 
 ## 🔴 报错是中文，前缀仍是英文
